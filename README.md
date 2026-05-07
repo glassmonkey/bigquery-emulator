@@ -67,14 +67,6 @@ $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 
 The BigQuery emulator embeds the SQL analyzer through [zetasql-wasm](https://github.com/glassmonkey/zetasql-wasm), so the install is a pure-Go `go install` — no CGO toolchain or ZetaSQL build is required.
 
-You can also download the docker image with the following command
-
-```console
-$ docker pull ghcr.io/goccy/bigquery-emulator:latest
-```
-
-You can also download the darwin(amd64) and linux(amd64) binaries directly from [releases](https://github.com/goccy/bigquery-emulator/releases)
-
 # How to start the standalone server
 
 If you can install the `bigquery-emulator` CLI, you can start the server using the following options.
@@ -106,14 +98,6 @@ $ ./bigquery-emulator --project=test
 [bigquery-emulator] REST server listening at 0.0.0.0:9050
 [bigquery-emulator] gRPC server listening at 0.0.0.0:9060
 ```
-
-If you want to use docker image to start emulator, specify like the following.
-
-```console
-$ docker run -it ghcr.io/goccy/bigquery-emulator:latest --project=test
-```
-
-* If you are using an M1 Mac ( and Docker Desktop ) you may get a warning. In that case please use `--platform linux/x86_64` option.
 
 ## How to use from bq client
 
