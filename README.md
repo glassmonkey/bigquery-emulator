@@ -1,6 +1,6 @@
 # BigQuery Emulator
 
-[![build and test](https://github.com/goccy/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/goccy/bigquery-emulator/actions/workflows/test.yml)
+[![build and test](https://github.com/glassmonkey/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/glassmonkey/bigquery-emulator/actions/workflows/test.yml)
 [![GoDoc](https://godoc.org/github.com/goccy/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/goccy/bigquery-emulator?tab=doc)
 
 
@@ -8,12 +8,14 @@ BigQuery emulator server implemented in Go.
 BigQuery emulator provides a way to launch a BigQuery server on your local machine for testing and development.
 
 > **Note: this is a fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator).**
-> The SQL analyzer has been swapped from the CGO-based [go-zetasql](https://github.com/goccy/go-zetasql) / [go-zetasqlite](https://github.com/goccy/go-zetasqlite) stack to the pure-Go [zetasql-wasm](https://github.com/glassmonkey/zetasql-wasm) (ZetaSQL compiled to WebAssembly, executed via [wazero](https://github.com/tetratelabs/wazero)). The vendored `internal/zetasqlite` layer replaces the external `go-zetasqlite` dependency.
+> The SQL analyzer has been swapped from the CGO-based [go-zetasql](https://github.com/goccy/go-zetasql) / [go-zetasqlite](https://github.com/goccy/go-zetasqlite) stack to the pure-Go [zetasql-wasm](https://github.com/glassmonkey/zetasql-wasm) (ZetaSQL compiled to WebAssembly, executed via [wazero](https://github.com/tetratelabs/wazero)). The vendored `internal/zetasqlite` layer replaces the external `go-zetasqlite` dependency. Huge thanks to [@goccy](https://github.com/goccy) for the original work this fork builds on.
 >
 > Practical differences:
 > - `go install` requires no CGO toolchain (no `clang++`, no `CGO_ENABLED=1`, no multi-minute ZetaSQL build).
 > - Cross-compilation works out of the box.
 > - Some runtime corners are still being filled in — see the test status of `internal/zetasqlite/` for the current gap list.
+>
+> The Go module path (`github.com/goccy/bigquery-emulator`) is kept unchanged for drop-in compatibility, so `go install` and library `import` paths still read `goccy/...`. Source distribution and issue tracking happen on this fork (`glassmonkey/bigquery-emulator`).
 
 # Features
 
@@ -109,7 +111,7 @@ $ ./bigquery-emulator --project=test --data-from-yaml=./server/testdata/data.yam
 [bigquery-emulator] gRPC server listening at 0.0.0.0:9060
 ```
 
-* `server/testdata/data.yaml` is [here](https://github.com/goccy/bigquery-emulator/blob/main/server/testdata/data.yaml)
+* `server/testdata/data.yaml` is [here](https://github.com/glassmonkey/bigquery-emulator/blob/main/server/testdata/data.yaml)
 
 ### 2. Call endpoint from bq client
 
@@ -283,7 +285,7 @@ After receiving a ZetaSQL query via the REST API from `bq` or a client SDK, the 
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145011-e35c2df4-5f5d-43ce-b7df-08cd130b5d31.png"></img>
 
-
+> Diagram credit: original by [@goccy](https://github.com/goccy) for the upstream `go-zetasqlite`-based architecture. The boxes labelled "go-zetasqlite" / "go-zetasql" map onto `internal/zetasqlite` and `zetasql-wasm` in this fork; the surrounding data flow is unchanged.
 
 ## Type Conversion Flow
 
@@ -292,6 +294,8 @@ In order to handle them in SQLite, `internal/zetasqlite` encodes every type exce
 When the encoded data is read back, a custom function registered with go-sqlite3 decodes it before use.
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145033-aa032878-7e01-4ec7-9a23-b174b87e1a24.png"></img>
+
+> Diagram credit: original by [@goccy](https://github.com/goccy); the encoding strategy is unchanged in this fork.
 
 
 # Reference
