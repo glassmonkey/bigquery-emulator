@@ -300,10 +300,13 @@ func (a *Analyzer) bindQueryParameters(mode zetasql.ParameterMode, args []driver
 		a.opt.PositionalQueryParameters = params
 		// ZetaSQL rejects "AllowUndeclaredParameters + PositionalQueryParameters"
 		// as ambiguous: with undeclared params allowed, the analyzer cannot
-		// tell which "?" each value is meant to bind to. Now that we publish
-		// the positional types up-front, undeclared mode is no longer needed
-		// for this query.
-		a.opt.AllowUndeclaredParameters = false
+		// tell which "?" each value is meant to bind to. Once we publish the
+		// positional types up-front (params non-empty), undeclared mode is
+		// no longer needed. When values aren't available yet (Prepare phase
+		// analyses the SQL with args=nil), keep undeclared mode on so the
+		// analyzer doesn't reject "?" placeholders for lack of declared
+		// types — the values arrive at Exec time.
+		a.opt.AllowUndeclaredParameters = len(params) == 0
 	default:
 		a.opt.QueryParameters = nil
 		a.opt.PositionalQueryParameters = nil
