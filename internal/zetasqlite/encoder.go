@@ -462,6 +462,62 @@ func ValueFromGoValue(v interface{}) (Value, error) {
 	return valueFromGoReflectValue(reflect.ValueOf(v))
 }
 
+// inferZetaSQLType returns the ZetaSQL Type that corresponds to v's Go type.
+// This is used to register query-parameter types with the analyzer before
+// the SQL is parsed, so that parameter references like @ids resolve.
+//
+// Untyped nil (and typed nil pointers) cannot be inferred — the caller has
+// to resolve the type some other way (e.g. from the surrounding SQL or the
+// declared parameter type) before passing the value in.
+func inferZetaSQLType(v interface{}) (types.Type, error) {
+	if v == nil {
+		return nil, fmt.Errorf("cannot infer zetasql type from untyped nil")
+	}
+	return inferZetaSQLTypeFromReflect(reflect.ValueOf(v))
+}
+
+func inferZetaSQLTypeFromReflect(v reflect.Value) (types.Type, error) {
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return types.Int64Type(), nil
+	case reflect.Float32, reflect.Float64:
+		return types.DoubleType(), nil
+	case reflect.Bool:
+		return types.BoolType(), nil
+	case reflect.String:
+		return types.StringType(), nil
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return types.BytesType(), nil
+		}
+		// Element type is taken from the static type, not a sample element,
+		// so empty slices still produce a well-typed ARRAY<...>.
+		elemSample := reflect.New(v.Type().Elem()).Elem()
+		elem, err := inferZetaSQLTypeFromReflect(elemSample)
+		if err != nil {
+			return nil, fmt.Errorf("failed to infer array element type: %w", err)
+		}
+		return types.NewArrayType(elem)
+	case reflect.Ptr:
+		if v.IsNil() {
+			// Nil-typed pointers fall back to the pointee's static type.
+			return inferZetaSQLTypeFromReflect(reflect.New(v.Type().Elem()).Elem())
+		}
+		return inferZetaSQLTypeFromReflect(v.Elem())
+	case reflect.Interface:
+		if v.IsNil() {
+			return nil, fmt.Errorf("cannot infer zetasql type from nil interface")
+		}
+		return inferZetaSQLTypeFromReflect(reflect.ValueOf(v.Interface()))
+	case reflect.Struct:
+		if _, ok := v.Interface().(time.Time); ok {
+			return types.TimestampType(), nil
+		}
+	}
+	return nil, fmt.Errorf("cannot infer zetasql type from go value of kind %s", v.Kind())
+}
+
 func valueFromGoReflectValue(v reflect.Value) (Value, error) {
 	kind := v.Type().Kind()
 	switch kind {

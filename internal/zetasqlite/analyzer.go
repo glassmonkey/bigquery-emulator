@@ -233,6 +233,9 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 				return nil, err
 			}
 			a.opt.ParameterMode = mode
+			if err := a.bindQueryParameters(mode, args); err != nil {
+				return nil, err
+			}
 			// TODO(zetasql-wasm-migration): zetasql-wasm has no
 			// AnalyzeStatementFromParserAST equivalent — re-analyse from
 			// SQL text. Fine for single-statement queries; for scripted
@@ -257,6 +260,56 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 		})
 	}
 	return actionFuncs, nil
+}
+
+// bindQueryParameters infers the ZetaSQL type of each driver value and
+// publishes the result on AnalyzerOptions so that @name / ? references in
+// the SQL resolve at analyse time. Without this the analyzer fails with
+// "Query parameter 'X' not found" before any execution starts.
+//
+// args without a name are treated as positional and only honored under
+// ParameterPositional; ParameterNamed silently skips them. The map keys
+// are lowercased to match the convention used by encodeNamedValue.
+func (a *Analyzer) bindQueryParameters(mode zetasql.ParameterMode, args []driver.NamedValue) error {
+	switch mode {
+	case zetasql.ParameterNamed:
+		params := map[string]types.Type{}
+		for _, arg := range args {
+			if arg.Name == "" {
+				continue
+			}
+			t, err := inferZetaSQLType(arg.Value)
+			if err != nil {
+				return fmt.Errorf("failed to infer type for parameter %q: %w", arg.Name, err)
+			}
+			params[strings.ToLower(arg.Name)] = t
+		}
+		a.opt.QueryParameters = params
+		a.opt.PositionalQueryParameters = nil
+		a.opt.AllowUndeclaredParameters = true
+	case zetasql.ParameterPositional:
+		params := make([]types.Type, 0, len(args))
+		for _, arg := range args {
+			t, err := inferZetaSQLType(arg.Value)
+			if err != nil {
+				return fmt.Errorf("failed to infer type for positional parameter at index %d: %w", arg.Ordinal, err)
+			}
+			params = append(params, t)
+		}
+		a.opt.QueryParameters = nil
+		a.opt.PositionalQueryParameters = params
+		// ZetaSQL rejects "AllowUndeclaredParameters + PositionalQueryParameters"
+		// as ambiguous: with undeclared params allowed, the analyzer cannot
+		// tell which "?" each value is meant to bind to. Now that we publish
+		// the positional types up-front, undeclared mode is no longer needed
+		// for this query.
+		a.opt.AllowUndeclaredParameters = false
+	default:
+		a.opt.QueryParameters = nil
+		a.opt.PositionalQueryParameters = nil
+		a.opt.AllowUndeclaredParameters = true
+	}
+	return nil
 }
 
 func (a *Analyzer) context(
