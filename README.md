@@ -7,6 +7,14 @@
 BigQuery emulator server implemented in Go.  
 BigQuery emulator provides a way to launch a BigQuery server on your local machine for testing and development.
 
+> **Note: this is a fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator).**
+> The SQL analyzer has been swapped from the CGO-based [go-zetasql](https://github.com/goccy/go-zetasql) / [go-zetasqlite](https://github.com/goccy/go-zetasqlite) stack to the pure-Go [zetasql-wasm](https://github.com/glassmonkey/zetasql-wasm) (ZetaSQL compiled to WebAssembly, executed via [wazero](https://github.com/tetratelabs/wazero)). The vendored `internal/zetasqlite` layer replaces the external `go-zetasqlite` dependency.
+>
+> Practical differences:
+> - `go install` requires no CGO toolchain (no `clang++`, no `CGO_ENABLED=1`, no multi-minute ZetaSQL build).
+> - Cross-compilation works out of the box.
+> - Some runtime corners are still being filled in — see the test status of `internal/zetasqlite/` for the current gap list.
+
 # Features
 
 - If you can choose the Go language as BigQuery client, you can launch a BigQuery emulator on the same process as the testing process by [httptest](https://pkg.go.dev/net/http/httptest) .
