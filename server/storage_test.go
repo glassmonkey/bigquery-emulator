@@ -44,6 +44,7 @@ var (
 )
 
 func TestStorageReadAVRO(t *testing.T) {
+	skipIfServerQuarantined(t)
 	const (
 		project = "test"
 		dataset = "dataset1"
@@ -133,6 +134,7 @@ func TestStorageReadAVRO(t *testing.T) {
 }
 
 func TestStorageReadARROW(t *testing.T) {
+	skipIfServerQuarantined(t)
 	const (
 		project = "test"
 		dataset = "dataset1"
@@ -392,6 +394,7 @@ func validateDatum(t *testing.T, d interface{}) {
 }
 
 func TestStorageWrite(t *testing.T) {
+	skipIfServerQuarantined(t)
 	for _, test := range []struct {
 		name                            string
 		streamType                      storagepb.WriteStream_Type

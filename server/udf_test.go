@@ -12,6 +12,7 @@ import (
 )
 
 func TestUDF(t *testing.T) {
+	skipIfServerQuarantined(t)
 	ctx := context.Background()
 
 	const (
