@@ -1,0 +1,114 @@
+name: Bump
+
+# Trigger: a maintainer adds one of `release-patch` / `release-minor` /
+# `release-major` to any open PR. The label encodes the bump type; the
+# workflow checks out main (regardless of the labelled PR's branch),
+# runs gobump, and opens a separate `release/vX.Y.Z` PR. Merging that
+# release PR fires release.yml, which tags and publishes the GitHub
+# Release.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    if: |
+      github.event.label.name == 'release-patch' ||
+      github.event.label.name == 'release-minor' ||
+      github.event.label.name == 'release-major'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Read current version
+        id: current
+        run: echo "version=$(go tool gobump show -r .)" >> "$GITHUB_OUTPUT"
+
+      - name: Determine bump type
+        id: bump_type
+        run: |
+          set -euo pipefail
+          case "${{ github.event.label.name }}" in
+            release-patch) echo "type=patch" >> "$GITHUB_OUTPUT" ;;
+            release-minor) echo "type=minor" >> "$GITHUB_OUTPUT" ;;
+            release-major) echo "type=major" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unexpected label: ${{ github.event.label.name }}" >&2; exit 1 ;;
+          esac
+
+      - name: Bump version
+        id: bump
+        run: |
+          set -euo pipefail
+          go tool gobump "${{ steps.bump_type.outputs.type }}" -w .
+          echo "version=$(go tool gobump show -r .)" >> "$GITHUB_OUTPUT"
+
+      - name: Determine commit range
+        id: range
+        run: |
+          set -euo pipefail
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)
+          if [ -z "$prev_tag" ]; then
+            prev_ref=$(git rev-list --max-parents=0 HEAD | head -n1)
+          else
+            prev_ref="$prev_tag"
+          fi
+          {
+            echo "prev_ref=${prev_ref}"
+            echo "range=${prev_ref}..HEAD"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build PR body
+        run: |
+          set -euo pipefail
+          new_version="v${{ steps.bump.outputs.version }}"
+          prev_ref="${{ steps.range.outputs.prev_ref }}"
+          range="${{ steps.range.outputs.range }}"
+          repo_url="${{ github.server_url }}/${{ github.repository }}"
+          {
+            echo "## Release ${new_version}"
+            echo
+            echo "Bump version: \`${{ steps.current.outputs.version }}\` → \`${{ steps.bump.outputs.version }}\`"
+            echo
+            echo "Triggered by adding the \`${{ github.event.label.name }}\` label to #${{ github.event.pull_request.number }}."
+            echo
+            echo "### Commit range"
+            echo
+            echo "\`${range}\` ([compare](${repo_url}/compare/${prev_ref}...main))"
+            echo
+            echo "### Release notes"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h)' "${range}"
+            echo
+          } > pr_body.md
+
+      - name: Create release branch and PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          new_version="v${{ steps.bump.outputs.version }}"
+          branch="release/${new_version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add version.go
+          git commit -m "chore(release): ${new_version}"
+          git push origin "${branch}"
+          gh pr create \
+            --title "release: ${new_version}" \
+            --body-file pr_body.md \
+            --base main \
+            --head "${branch}" \
+            --label release

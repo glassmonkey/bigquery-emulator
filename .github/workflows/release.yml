@@ -1,65 +1,76 @@
-name: publish
-on:
-  push:
-    tags:
-      - v*
-jobs:
-  publish:
-    name: Publish for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact_name: bigquery-emulator
-            asset_name: bigquery-emulator-linux-amd64
-            go-version: "1.21.5"
-          - os: macos-latest
-            artifact_name: bigquery-emulator
-            asset_name: bigquery-emulator-darwin-amd64
-            go-version: "1.21.5"
+name: Release
 
+# Triggered by merging a release PR (branch starting with `release/`)
+# created by bump.yml. Reads version.go via gobump, tags the merge
+# commit, and creates a GitHub Release with auto-generated notes from
+# the previous tag.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
     steps:
-    - name: checkout
-      uses: actions/checkout@v4
-    - name: setup Go ${{ matrix.go-version }}
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ matrix.go-version }}
-        cache: true
-    - name: extract version from tags
-      id: meta
-      run: |
-        echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/}
-    - uses: rui314/setup-mold@v1
-    - name: cache for linux
-      uses: actions/cache@v3
-      if: runner.os == 'Linux'
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-    - name: cache for macOS
-      uses: actions/cache@v3
-      if: runner.os == 'macOS'
-      with:
-        path: |
-          ~/Library/Caches/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-    - name: build
-      run: make emulator/build
-      env:
-        VERSION: ${{ steps.meta.outputs.VERSION }}
-    - name: Upload binaries to release
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: ${{ matrix.artifact_name }}
-        asset_name: ${{ matrix.asset_name }}
-        tag: ${{ github.ref }}
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Read version
+        id: version
+        run: echo "tag=v$(go tool gobump show -r .)" >> "$GITHUB_OUTPUT"
+
+      - name: Find previous tag
+        id: prev
+        run: |
+          set -euo pipefail
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)
+          echo "tag=${prev_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists; skipping."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          prev="${{ steps.prev.outputs.tag }}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; skipping."
+            exit 0
+          fi
+          if [ -n "${prev}" ]; then
+            gh release create "${tag}" \
+              --title "${tag}" \
+              --generate-notes \
+              --notes-start-tag "${prev}"
+          else
+            gh release create "${tag}" \
+              --title "${tag}" \
+              --generate-notes
+          fi
