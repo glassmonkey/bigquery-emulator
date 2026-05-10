@@ -1,7 +1,7 @@
 # BigQuery Emulator
 
 [![build and test](https://github.com/glassmonkey/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/glassmonkey/bigquery-emulator/actions/workflows/test.yml)
-[![GoDoc](https://godoc.org/github.com/goccy/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/goccy/bigquery-emulator?tab=doc)
+[![GoDoc](https://godoc.org/github.com/glassmonkey/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/glassmonkey/bigquery-emulator?tab=doc)
 
 
 BigQuery emulator server implemented in Go.  
@@ -14,8 +14,6 @@ BigQuery emulator provides a way to launch a BigQuery server on your local machi
 > - `go install` requires no CGO toolchain (no `clang++`, no `CGO_ENABLED=1`, no multi-minute ZetaSQL build).
 > - Cross-compilation works out of the box.
 > - Some runtime corners are still being filled in — see the test status of `internal/zetasqlite/` for the current gap list.
->
-> The Go module path (`github.com/goccy/bigquery-emulator`) is kept unchanged for drop-in compatibility, so `go install` and library `import` paths still read `goccy/...`. Source distribution and issue tracking happen on this fork (`glassmonkey/bigquery-emulator`).
 
 # Features
 
@@ -64,10 +62,34 @@ However, this project is a personal project and I develop it on my days off and 
 If Go is installed, you can install the latest version with the following command
 
 ```console
-$ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
+$ go install github.com/glassmonkey/bigquery-emulator/cmd/bigquery-emulator@latest
 ```
 
 The BigQuery emulator embeds the SQL analyzer through [zetasql-wasm](https://github.com/glassmonkey/zetasql-wasm), so the install is a pure-Go `go install` — no CGO toolchain or ZetaSQL build is required.
+
+## Run via Docker
+
+Container images are published to GitHub Container Registry, so the emulator can be brought up without building anything locally.
+
+```console
+$ docker run --rm -p 9050:9050 -p 9060:9060 \
+    ghcr.io/glassmonkey/bigquery-emulator:v0.1 \
+    --project=test
+```
+
+Mount a YAML seed file into the container to preload datasets and tables on startup:
+
+```console
+$ docker run --rm -p 9050:9050 -p 9060:9060 \
+    -v $(pwd)/data.yaml:/data.yaml \
+    ghcr.io/glassmonkey/bigquery-emulator:v0.1 \
+    --project=test --data-from-yaml=/data.yaml
+```
+
+Multi-arch images are published for `linux/amd64` and `linux/arm64`. Tag aliases:
+
+- `:v<major>.<minor>` (e.g. `:v0.1`) — tracks the latest patch within a minor series.
+- `:v<major>.<minor>.<patch>` (e.g. `:v0.1.6`) — pinned to an exact release.
 
 # How to start the standalone server
 
@@ -127,6 +149,8 @@ $ bq --api http://0.0.0.0:9050 query --project_id=test "SELECT * FROM dataset1.t
 
 ## How to use from python client
 
+A working compose-based example that pins the v0.1 image and runs `example.py` end-to-end lives at [`_examples/python`](./_examples/python). The snippet below is the same client-side wiring extracted for inline reference.
+
 ### 1. Start the standalone server
 
 ```console
@@ -177,9 +201,9 @@ result = client.query(sql).to_dataframe(bqstorage_client=read_client)
 # Synopsis
 
 If you use the Go language as a BigQuery client, you can launch the BigQuery emulator on the same process as the testing process.  
-Please imports `github.com/goccy/bigquery-emulator/server` ( and `github.com/goccy/bigquery-emulator/types` ) and you can use `server.New` API to create the emulator server instance.
+Please imports `github.com/glassmonkey/bigquery-emulator/server` ( and `github.com/glassmonkey/bigquery-emulator/types` ) and you can use `server.New` API to create the emulator server instance.
 
-See the API reference for more information: https://pkg.go.dev/github.com/goccy/bigquery-emulator
+See the API reference for more information: https://pkg.go.dev/github.com/glassmonkey/bigquery-emulator
 
 ```go
 package main
@@ -189,8 +213,8 @@ import (
   "fmt"
 
   "cloud.google.com/go/bigquery"
-  "github.com/goccy/bigquery-emulator/server"
-  "github.com/goccy/bigquery-emulator/types"
+  "github.com/glassmonkey/bigquery-emulator/server"
+  "github.com/glassmonkey/bigquery-emulator/types"
   "google.golang.org/api/iterator"
   "google.golang.org/api/option"
 )

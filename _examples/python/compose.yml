@@ -1,15 +1,13 @@
-version: '2'
 services:
   bigquery-emulator:
     container_name: bigquery
-    image: ghcr.io/goccy/bigquery-emulator:latest
+    image: ghcr.io/glassmonkey/bigquery-emulator:v0.1
     ports:
-      - "0.0.0.0:9050:9050"
+      - "127.0.0.1:9050:9050"
     volumes:
       - '.:/work'
     working_dir: /work
-    command: |
-      --project=test --data-from-yaml=/work/data.yaml
+    command: --project=test --data-from-yaml=/work/data.yaml
   app:
     container_name: app
     build: .

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/goccy/bigquery-emulator/internal/zetasqlite"
+	"github.com/glassmonkey/bigquery-emulator/internal/zetasqlite"
 )
 
 type Manager struct {

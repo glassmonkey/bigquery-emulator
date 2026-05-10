@@ -1,17 +1,32 @@
 # Python Example
 
+Runs the official `google-cloud-bigquery` client against bigquery-emulator,
+querying a YAML-seeded table.
+
+### Requirements
+
+- Docker (with the `docker compose` plugin)
+
 ### Setup
 
-Build docker image for example and running bigquery-emulator's container
+Build the example image and start the emulator container:
 
 ```
 make setup
 ```
 
-### Run app
+### Run
 
-Run app ( example.py ) by docker-compose
+Run `example.py` against the running emulator:
 
 ```
 make run
+```
+
+### Cleanup
+
+Stop and remove the emulator container + its volumes:
+
+```
+make down
 ```

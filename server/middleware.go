@@ -10,7 +10,7 @@ import (
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
 
-	"github.com/goccy/bigquery-emulator/internal/logger"
+	"github.com/glassmonkey/bigquery-emulator/internal/logger"
 )
 
 func sequentialAccessMiddleware() func(http.Handler) http.Handler {
