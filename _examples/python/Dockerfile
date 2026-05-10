@@ -1,16 +1,10 @@
-FROM python:3.9.14-bullseye
-
-RUN pip install --upgrade pip
-RUN pip install --upgrade setuptools
-RUN pip install pipenv
+FROM python:3.13-slim
 
 WORKDIR /work
 
-COPY Pipfile /work/Pipfile
-COPY Pipfile.lock /work/Pipfile.lock
-
-RUN pipenv install
+COPY requirements.txt /work/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY example.py /work/example.py
 
-CMD ["pipenv", "run", "example"]
+CMD ["python", "example.py"]
