@@ -1,11 +1,11 @@
 //go:build e2e
 
-// Smoke tests the bigquery-emulator container image end to end.
-// Build the image from the top-level Dockerfile, bring the service
-// up via docker compose, run every SQL file under testdata/query/
-// through the BigQuery REST query endpoint, and tear down. Asserts
-// that each query's response (rendered as headerless-friendly TSV)
-// matches the paired golden file.
+// Smoke tests an already-running bigquery-emulator container.
+// Assumes the emulator is reachable on http://localhost:9050 — bring
+// it up with `make docker/up` before running. Iterates every
+// testdata/query/*.sql, posts it to the BigQuery REST query
+// endpoint, renders the response as TSV, and diffs against the
+// paired .golden.tsv.
 //
 // testdata layout:
 //
@@ -19,15 +19,17 @@
 //	                               names (\t-joined), line 2..N = row
 //	                               values (\t-joined)
 //
-// Run from repo root:
+// Run via the Makefile (the `make e2e` target wires the
+// docker/healthcheck gate so the test fails fast with a clear
+// message if the emulator is not up):
 //
-//	go test -tags=e2e -count=1 ./e2e/...
+//	make docker/up
+//	make e2e
+//	make docker/down
 //
-// Optional env:
+// Or directly:
 //
-//	REVISION       — REVISION build-arg passed to docker build.
-//	                 Defaults to "local-test".
-//	READY_TIMEOUT  — seconds to wait for the HTTP port. Default 30.
+//	go test -tags=e2e -count=1 -v ./e2e/...
 package e2e_test
 
 import (
@@ -40,7 +42,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,31 +53,11 @@ const (
 	httpAddr    = "http://localhost:9050"
 )
 
-// TestSmoke brings up the emulator container once and runs every
-// .sql file under testdata/query/ as a sub-test. Each query's
-// rendered TSV is compared to the paired .golden.tsv.
+// TestSmoke posts every testdata/query/*.sql to the running
+// emulator and diffs the rendered TSV against the paired
+// .golden.tsv. The container's lifecycle is the user's
+// responsibility (see `make docker/up` / `make docker/down`).
 func TestSmoke(t *testing.T) {
-	readyTimeout := 30 * time.Second
-	if v := os.Getenv("READY_TIMEOUT"); v != "" {
-		secs, err := strconv.Atoi(v)
-		if err != nil {
-			t.Fatalf("READY_TIMEOUT=%q: %v", v, err)
-		}
-		readyTimeout = time.Duration(secs) * time.Second
-	}
-
-	// Arrange: build, verify --version, bring up, schedule teardown.
-	runCompose(t, "build")
-	runCompose(t, "run", "--rm", "--no-deps", "bigquery-emulator", "--version")
-	runCompose(t, "up", "-d")
-	t.Cleanup(func() {
-		if err := exec.Command("docker", "compose", "-f", composeFile, "down", "--volumes").Run(); err != nil {
-			t.Logf("docker compose down: %v", err)
-		}
-	})
-
-	waitReady(t, readyTimeout)
-
 	cases, err := filepath.Glob("testdata/query/*.sql")
 	if err != nil {
 		t.Fatalf("glob testdata/query: %v", err)
@@ -116,9 +97,9 @@ func TestSmoke(t *testing.T) {
 }
 
 // queryResponse decodes the synchronous query endpoint shape we
-// care about. The full response carries more fields (jobReference,
-// totalRows, ...) but the smoke harness only needs the schema field
-// names and the row values to render TSV.
+// care about. The full response carries more fields
+// (jobReference, totalRows, ...) but the smoke harness only needs
+// the schema field names and the row values to render TSV.
 type queryResponse struct {
 	Schema struct {
 		Fields []struct {
@@ -163,49 +144,11 @@ func normaliseTSV(s string) string {
 	return strings.TrimRight(s, "\n\r ") + "\n"
 }
 
-// runCompose runs `docker compose -f compose.yml <args...>` and
-// fails the test on non-zero exit. REVISION flows through so the
-// Dockerfile picks it up as a build-arg.
-func runCompose(t *testing.T, args ...string) {
-	t.Helper()
-	full := append([]string{"compose", "-f", composeFile}, args...)
-	cmd := exec.Command("docker", full...)
-	cmd.Stdout = testLogWriter{t}
-	cmd.Stderr = testLogWriter{t}
-	rev := os.Getenv("REVISION")
-	if rev == "" {
-		rev = "local-test"
-	}
-	cmd.Env = append(os.Environ(), "REVISION="+rev)
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("docker compose %s: %v", strings.Join(args, " "), err)
-	}
-}
-
-// waitReady polls the emulator's HTTP port at 1s intervals until
-// any HTTP response is observed (even a 404 is fine — it means the
-// router is up).
-func waitReady(t *testing.T, timeout time.Duration) {
-	t.Helper()
-	t.Logf("waiting for %s (timeout=%s)", httpAddr, timeout)
-	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: time.Second}
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(httpAddr + "/")
-		if err == nil {
-			resp.Body.Close()
-			t.Log("ready")
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	dumpLogs(t)
-	t.Fatalf("timed out waiting for %s", httpAddr)
-}
-
 // postQuery POSTs the SQL to /projects/<project>/queries and
 // returns the parsed response. Fails the test on transport, HTTP,
-// or JSON-decode errors.
+// or JSON-decode errors. Dumps the last 50 lines of the
+// container's logs alongside the failure so a single test run
+// carries the diagnostic trail.
 func postQuery(t *testing.T, sql string) queryResponse {
 	t.Helper()
 	url := fmt.Sprintf("%s/projects/%s/queries", httpAddr, project)
@@ -249,8 +192,9 @@ func postQuery(t *testing.T, sql string) queryResponse {
 }
 
 // dumpLogs prints the last 50 lines of the emulator's container
-// logs to the test output, so a failing run leaves the trace right
-// next to the assertion that failed.
+// logs to the test output. Best-effort: if `docker compose` is not
+// on PATH or the compose stack is not running, the failure stays
+// silent (the higher-level assertion already reported the cause).
 func dumpLogs(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "logs", "--tail=50", "bigquery-emulator")
