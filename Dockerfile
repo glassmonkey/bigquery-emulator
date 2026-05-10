@@ -1,7 +1,8 @@
-# Pure-Go build: zetasql-wasm runs through wazero (no CGO), so the
-# Dockerfile no longer needs clang / CGO_ENABLED=1 / linkmode=external.
-# Reads version.go's `const Version` for the tag (gobump-managed); the
-# REVISION build-arg still flows in as the git SHA via -ldflags.
+# Builds bigquery-emulator with CGO enabled. zetasql-wasm itself is
+# pure Go (wazero), but the SQLite driver (mattn/go-sqlite3) the fork
+# uses is CGO-bound, so the binary needs gcc + glibc to link. The
+# golang:bookworm builder ships gcc; the final image is
+# distroless/base-debian12 (carries glibc + ca-certs + tzdata).
 ARG GO_VERSION=1.26
 ARG DEBIAN_VERSION=bookworm
 
@@ -15,21 +16,21 @@ RUN go mod download
 
 COPY . ./
 
-ARG TARGETOS
-ARG TARGETARCH
 ARG REVISION
 
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+# CGO_ENABLED=1 because the SQLite driver requires it. With buildx +
+# QEMU each platform builds for itself, so we do not set GOOS/GOARCH
+# explicitly — they default to the running platform.
+RUN CGO_ENABLED=1 \
     go build \
     -trimpath \
     -ldflags "-s -w -X main.revision=${REVISION}" \
     -o /go/bin/bigquery-emulator \
     ./cmd/bigquery-emulator
 
-# distroless/static includes ca-certificates and tzdata while staying
-# minimal. Pure-Go binaries are statically linked by default, so
-# /static is the right tier (no glibc needed).
-FROM gcr.io/distroless/static-debian12
+# distroless/base-debian12 carries glibc, ca-certificates, and tzdata
+# — what the CGO-linked binary needs at runtime, nothing more.
+FROM gcr.io/distroless/base-debian12
 
 COPY --from=builder /go/bin/bigquery-emulator /bin/bigquery-emulator
 

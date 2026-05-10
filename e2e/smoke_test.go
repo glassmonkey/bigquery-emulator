@@ -2,17 +2,26 @@
 
 // Smoke tests the bigquery-emulator container image end to end.
 // Build the image from the top-level Dockerfile, bring the service
-// up via docker compose, run every SQL file under testdata/ through
-// the BigQuery REST query endpoint, and tear down. Asserts that
-// each query returns the expected first-column value.
+// up via docker compose, run every SQL file under testdata/query/
+// through the BigQuery REST query endpoint, and tear down. Asserts
+// that each query's response (rendered as headerless-friendly TSV)
+// matches the paired golden file.
+//
+// testdata layout:
+//
+//	e2e/testdata/
+//	├── fixture/                   pre-condition state (empty for now;
+//	│                              future seed data / schema YAML can
+//	│                              live here and be wired into compose)
+//	└── query/
+//	    ├── <name>.sql             query to POST
+//	    └── <name>.golden.tsv      expected response, line 1 = column
+//	                               names (\t-joined), line 2..N = row
+//	                               values (\t-joined)
 //
 // Run from repo root:
 //
 //	go test -tags=e2e -count=1 ./e2e/...
-//
-// The `e2e` build tag keeps `go test ./...` from spinning up Docker
-// inadvertently. -count=1 disables go test's pass-cache so the
-// harness runs against a freshly built image each time.
 //
 // Optional env:
 //
@@ -30,6 +39,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,10 +52,9 @@ const (
 	httpAddr    = "http://localhost:9050"
 )
 
-// TestSmoke brings up the emulator container once and runs each
-// testdata case through the synchronous BigQuery REST query
-// endpoint. Cases are sub-tests so a regression in one query type
-// shows up clearly under `TestSmoke/<name>`.
+// TestSmoke brings up the emulator container once and runs every
+// .sql file under testdata/query/ as a sub-test. Each query's
+// rendered TSV is compared to the paired .golden.tsv.
 func TestSmoke(t *testing.T) {
 	readyTimeout := 30 * time.Second
 	if v := os.Getenv("READY_TIMEOUT"); v != "" {
@@ -68,36 +77,90 @@ func TestSmoke(t *testing.T) {
 
 	waitReady(t, readyTimeout)
 
-	for _, tc := range []struct {
-		name    string
-		sqlFile string
-		want    string // expected rows[0].f[0].v
-	}{
-		{
-			name:    "select_one",
-			sqlFile: "testdata/select_one.sql",
-			want:    "1",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			sqlBytes, err := os.ReadFile(tc.sqlFile)
+	cases, err := filepath.Glob("testdata/query/*.sql")
+	if err != nil {
+		t.Fatalf("glob testdata/query: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no testdata/query/*.sql files found")
+	}
+
+	for _, sqlPath := range cases {
+		sqlPath := sqlPath
+		name := strings.TrimSuffix(filepath.Base(sqlPath), ".sql")
+		goldenPath := strings.TrimSuffix(sqlPath, ".sql") + ".golden.tsv"
+
+		t.Run(name, func(t *testing.T) {
+			sqlBytes, err := os.ReadFile(sqlPath)
 			if err != nil {
-				t.Fatalf("read %s: %v", tc.sqlFile, err)
+				t.Fatalf("read %s: %v", sqlPath, err)
 			}
 			sql := strings.TrimSpace(string(sqlBytes))
 
+			wantBytes, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("read %s: %v", goldenPath, err)
+			}
+			want := normaliseTSV(string(wantBytes))
+
 			// Act
-			got := postQuery(t, sql)
+			resp := postQuery(t, sql)
+			got := normaliseTSV(renderTSV(resp))
 
 			// Assert
-			if len(got.Rows) == 0 || len(got.Rows[0].F) == 0 {
-				t.Fatalf("response carried no rows: %+v", got)
-			}
-			if v := got.Rows[0].F[0].V; v != tc.want {
-				t.Errorf("rows[0].f[0].v = %q, want %q", v, tc.want)
+			if got != want {
+				t.Errorf("response TSV mismatch (%s)\n--- got\n%s\n--- want\n%s", goldenPath, got, want)
 			}
 		})
 	}
+}
+
+// queryResponse decodes the synchronous query endpoint shape we
+// care about. The full response carries more fields (jobReference,
+// totalRows, ...) but the smoke harness only needs the schema field
+// names and the row values to render TSV.
+type queryResponse struct {
+	Schema struct {
+		Fields []struct {
+			Name string `json:"name"`
+		} `json:"fields"`
+	} `json:"schema"`
+	Rows []struct {
+		F []struct {
+			V string `json:"v"`
+		} `json:"f"`
+	} `json:"rows"`
+}
+
+// renderTSV turns a query response into a tab-separated string with
+// the column-name header on the first line and row values on the
+// subsequent lines. Pairs with normaliseTSV at the comparison site
+// so trailing whitespace differences between the response and the
+// golden file do not produce noise.
+func renderTSV(resp queryResponse) string {
+	var sb strings.Builder
+	headers := make([]string, 0, len(resp.Schema.Fields))
+	for _, f := range resp.Schema.Fields {
+		headers = append(headers, f.Name)
+	}
+	sb.WriteString(strings.Join(headers, "\t"))
+	sb.WriteByte('\n')
+	for _, row := range resp.Rows {
+		values := make([]string, 0, len(row.F))
+		for _, c := range row.F {
+			values = append(values, c.V)
+		}
+		sb.WriteString(strings.Join(values, "\t"))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+// normaliseTSV strips surrounding whitespace and trailing newlines
+// so the renderTSV output and the editor-saved golden file compare
+// equal even when one ends with an extra newline.
+func normaliseTSV(s string) string {
+	return strings.TrimRight(s, "\n\r ") + "\n"
 }
 
 // runCompose runs `docker compose -f compose.yml <args...>` and
@@ -109,11 +172,11 @@ func runCompose(t *testing.T, args ...string) {
 	cmd := exec.Command("docker", full...)
 	cmd.Stdout = testLogWriter{t}
 	cmd.Stderr = testLogWriter{t}
-	if rev := os.Getenv("REVISION"); rev != "" {
-		cmd.Env = append(os.Environ(), "REVISION="+rev)
-	} else {
-		cmd.Env = append(os.Environ(), "REVISION=local-test")
+	rev := os.Getenv("REVISION")
+	if rev == "" {
+		rev = "local-test"
 	}
+	cmd.Env = append(os.Environ(), "REVISION="+rev)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("docker compose %s: %v", strings.Join(args, " "), err)
 	}
@@ -138,18 +201,6 @@ func waitReady(t *testing.T, timeout time.Duration) {
 	}
 	dumpLogs(t)
 	t.Fatalf("timed out waiting for %s", httpAddr)
-}
-
-// queryResponse decodes the synchronous query endpoint shape we
-// care about. The full response carries more fields (jobReference,
-// schema, totalRows, ...) but the smoke harness only needs the
-// first row's first column.
-type queryResponse struct {
-	Rows []struct {
-		F []struct {
-			V string `json:"v"`
-		} `json:"f"`
-	} `json:"rows"`
 }
 
 // postQuery POSTs the SQL to /projects/<project>/queries and
