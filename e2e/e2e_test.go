@@ -82,25 +82,13 @@ func TestSmoke(t *testing.T) {
 
 			// Act
 			resp := postQuery(t, sql)
-			got := normaliseTSV(renderTSV(resp))
+			got := renderTSV(resp)
 
-			// Assert. If the golden file is missing, write the
-			// observed response as the new golden and pass — the
-			// "first run on a freshly-added query" path. The
-			// committer reviews the generated file and commits it
-			// with the .sql; subsequent runs diff against it.
-			wantBytes, err := os.ReadFile(goldenPath)
-			if errors.Is(err, fs.ErrNotExist) {
-				if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
-					t.Fatalf("create golden file %s: %v", goldenPath, err)
-				}
-				t.Logf("created %s — review and commit; next run will diff against it", goldenPath)
+			// Assert
+			want, created := goldenWantOrCreate(t, goldenPath, got)
+			if created {
 				return
 			}
-			if err != nil {
-				t.Fatalf("read %s: %v", goldenPath, err)
-			}
-			want := normaliseTSV(string(wantBytes))
 			if got != want {
 				t.Errorf("response TSV mismatch (%s)\n--- got\n%s\n--- want\n%s", goldenPath, got, want)
 			}
@@ -127,9 +115,9 @@ type queryResponse struct {
 
 // renderTSV turns a query response into a tab-separated string with
 // the column-name header on the first line and row values on the
-// subsequent lines. Pairs with normaliseTSV at the comparison site
-// so trailing whitespace differences between the response and the
-// golden file do not produce noise.
+// subsequent lines. Always ends with a trailing newline so the
+// golden file's editor-friendly trailing newline is preserved on a
+// byte-for-byte compare.
 func renderTSV(resp queryResponse) string {
 	var sb strings.Builder
 	headers := make([]string, 0, len(resp.Schema.Fields))
@@ -149,11 +137,25 @@ func renderTSV(resp queryResponse) string {
 	return sb.String()
 }
 
-// normaliseTSV strips surrounding whitespace and trailing newlines
-// so the renderTSV output and the editor-saved golden file compare
-// equal even when one ends with an extra newline.
-func normaliseTSV(s string) string {
-	return strings.TrimRight(s, "\n\r ") + "\n"
+// goldenWantOrCreate reads the golden file at path. If it does not
+// exist, write `got` as the new golden, log the creation, and
+// return (got, true) — the "created on first run" path so the
+// caller can early-return with the diff trivially equal. The
+// caller checks `created` and skips the comparison in that case.
+func goldenWantOrCreate(t *testing.T, path, got string) (want string, created bool) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("create golden file %s: %v", path, err)
+		}
+		t.Logf("created %s — review and commit; next run will diff against it", path)
+		return got, true
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(raw), false
 }
 
 // postQuery POSTs the SQL to /projects/<project>/queries and
