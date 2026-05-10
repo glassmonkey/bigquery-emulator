@@ -36,8 +36,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -78,17 +80,27 @@ func TestSmoke(t *testing.T) {
 			}
 			sql := strings.TrimSpace(string(sqlBytes))
 
-			wantBytes, err := os.ReadFile(goldenPath)
-			if err != nil {
-				t.Fatalf("read %s: %v", goldenPath, err)
-			}
-			want := normaliseTSV(string(wantBytes))
-
 			// Act
 			resp := postQuery(t, sql)
 			got := normaliseTSV(renderTSV(resp))
 
-			// Assert
+			// Assert. If the golden file is missing, write the
+			// observed response as the new golden and pass — the
+			// "first run on a freshly-added query" path. The
+			// committer reviews the generated file and commits it
+			// with the .sql; subsequent runs diff against it.
+			wantBytes, err := os.ReadFile(goldenPath)
+			if errors.Is(err, fs.ErrNotExist) {
+				if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
+					t.Fatalf("create golden file %s: %v", goldenPath, err)
+				}
+				t.Logf("created %s — review and commit; next run will diff against it", goldenPath)
+				return
+			}
+			if err != nil {
+				t.Fatalf("read %s: %v", goldenPath, err)
+			}
+			want := normaliseTSV(string(wantBytes))
 			if got != want {
 				t.Errorf("response TSV mismatch (%s)\n--- got\n%s\n--- want\n%s", goldenPath, got, want)
 			}
