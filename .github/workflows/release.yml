@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered when the long-lived `release/next` PR is merged into main.
+# Triggered when the long-lived `release` PR is merged into main.
 # Reads version.go via gobump, tags the merge commit, and publishes a
 # GitHub Release with auto-generated notes scoped to commits since
 # the previous tag.
@@ -16,7 +16,7 @@ jobs:
   tag:
     if: |
       github.event.pull_request.merged == true &&
-      github.event.pull_request.head.ref == 'release/next'
+      github.event.pull_request.head.ref == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
