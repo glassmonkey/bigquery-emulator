@@ -85,13 +85,7 @@ func TestSmoke(t *testing.T) {
 			got := renderTSV(resp)
 
 			// Assert
-			want, created := goldenWantOrCreate(t, goldenPath, got)
-			if created {
-				return
-			}
-			if got != want {
-				t.Errorf("response TSV mismatch (%s)\n--- got\n%s\n--- want\n%s", goldenPath, got, want)
-			}
+			assertGolden(t, goldenPath, got)
 		})
 	}
 }
@@ -137,12 +131,16 @@ func renderTSV(resp queryResponse) string {
 	return sb.String()
 }
 
-// goldenWantOrCreate reads the golden file at path. If it does not
-// exist, write `got` as the new golden, log the creation, and
-// return (got, true) — the "created on first run" path so the
-// caller can early-return with the diff trivially equal. The
-// caller checks `created` and skips the comparison in that case.
-func goldenWantOrCreate(t *testing.T, path, got string) (want string, created bool) {
+// assertGolden compares `got` against the golden file at path.
+// On the first run for a freshly-added query the file does not
+// exist yet — in that case the helper writes `got` as the new
+// golden, logs the creation, and returns without flagging the
+// test as failed. Subsequent runs hit the diff branch.
+//
+// Callers do not need to distinguish "created" from "matched"
+// since both outcomes are a passing test from the test case's
+// point of view; that bookkeeping is the helper's responsibility.
+func assertGolden(t *testing.T, path, got string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -150,12 +148,14 @@ func goldenWantOrCreate(t *testing.T, path, got string) (want string, created bo
 			t.Fatalf("create golden file %s: %v", path, err)
 		}
 		t.Logf("created %s — review and commit; next run will diff against it", path)
-		return got, true
+		return
 	}
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	return string(raw), false
+	if want := string(raw); got != want {
+		t.Errorf("response mismatch (%s)\n--- got\n%s\n--- want\n%s", path, got, want)
+	}
 }
 
 // postQuery POSTs the SQL to /projects/<project>/queries and
