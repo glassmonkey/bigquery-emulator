@@ -1,14 +1,16 @@
 name: Bump
 
-# Triggered by every merged PR into main, except the release PR
-# itself. Determines the bump type from the PR's labels:
-#   - "major"  → major bump
-#   - "minor"  → minor bump
-#   - neither  → patch bump (default)
-# then bumps version.go on the long-lived `release` branch
-# (cumulative: each merge adds on top of whatever the release branch
-# already carries) and upserts a release PR. Maintainer merges the
-# release PR to fire release.yml, which tags and publishes.
+# Two jobs, both triggered on PR merge into main:
+#
+#   - bump: fires for non-release PRs (head != "release"). Determines
+#     bump type from PR labels ("major" / "minor" / else patch),
+#     refreshes the long-lived `release` branch on top of main, runs
+#     gobump, and upserts the release PR.
+#
+#   - tag:  fires only for the release PR's merge (head == "release").
+#     Reads version.go via gobump, tags the merge commit, and pushes
+#     the tag. The tag push triggers release.yml, which creates the
+#     GitHub Release.
 on:
   pull_request:
     types: [closed]
@@ -49,22 +51,12 @@ jobs:
             echo "type=patch" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check if release branch exists on origin
-        id: branch
-        run: |
-          set -euo pipefail
-          if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check out release (existing) or main (fresh)
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ "${{ steps.branch.outputs.exists }}" = "true" ]; then
+          if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
             git fetch origin release:release
             git checkout release
             # Rebase onto latest main so the release branch always
@@ -81,7 +73,7 @@ jobs:
           go tool gobump "${{ steps.bump_type.outputs.type }}" -w .
           echo "version=$(go tool gobump show -r .)" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and force-push release
+      - name: Commit and force-push release branch
         run: |
           set -euo pipefail
           new_tag="v${{ steps.bump.outputs.version }}"
@@ -92,7 +84,7 @@ jobs:
           fi
           git commit -m "chore(release): ${new_tag}"
           # force-with-lease: don't clobber a concurrent run that already
-          # advanced release.
+          # advanced the release branch.
           git push --force-with-lease origin release
 
       - name: Build PR body
@@ -140,3 +132,37 @@ jobs:
               --head release \
               --label release
           fi
+
+  tag:
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Read version
+        id: version
+        run: echo "tag=v$(go tool gobump show -r .)" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists; skipping."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
