@@ -1,8 +1,8 @@
 name: Release
 
-# Triggered by merging a release PR (branch starting with `release/`)
-# created by bump.yml. Reads version.go via gobump, tags the merge
-# commit, and creates a GitHub Release with auto-generated notes from
+# Triggered when the long-lived `release/next` PR is merged into main.
+# Reads version.go via gobump, tags the merge commit, and publishes a
+# GitHub Release with auto-generated notes scoped to commits since
 # the previous tag.
 on:
   pull_request:
@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   tag:
-    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'release/next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
