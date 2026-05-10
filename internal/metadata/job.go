@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
+	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 )
 

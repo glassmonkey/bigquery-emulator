@@ -7,11 +7,11 @@ import (
 	"fmt"
 
 	"github.com/goccy/go-json"
-	"github.com/goccy/bigquery-emulator/internal/zetasqlite"
+	"github.com/glassmonkey/bigquery-emulator/internal/zetasqlite"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
-	"github.com/goccy/bigquery-emulator/types"
+	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
+	"github.com/glassmonkey/bigquery-emulator/types"
 )
 
 var schemata = []string{

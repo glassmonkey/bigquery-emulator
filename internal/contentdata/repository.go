@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/goccy/bigquery-emulator/internal/zetasqlite"
+	"github.com/glassmonkey/bigquery-emulator/internal/zetasqlite"
 	"go.uber.org/zap"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 
-	"github.com/goccy/bigquery-emulator/internal/connection"
-	"github.com/goccy/bigquery-emulator/internal/logger"
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
-	"github.com/goccy/bigquery-emulator/types"
+	"github.com/glassmonkey/bigquery-emulator/internal/connection"
+	"github.com/glassmonkey/bigquery-emulator/internal/logger"
+	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
+	"github.com/glassmonkey/bigquery-emulator/types"
 )
 
 type Repository struct {

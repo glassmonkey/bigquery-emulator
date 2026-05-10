@@ -21,17 +21,17 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/goccy/go-json"
-	"github.com/goccy/bigquery-emulator/internal/zetasqlite"
+	"github.com/glassmonkey/bigquery-emulator/internal/zetasqlite"
 	"go.uber.org/zap"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
-	"github.com/goccy/bigquery-emulator/internal/connection"
-	"github.com/goccy/bigquery-emulator/internal/logger"
-	"github.com/goccy/bigquery-emulator/internal/metadata"
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
-	"github.com/goccy/bigquery-emulator/types"
+	"github.com/glassmonkey/bigquery-emulator/internal/connection"
+	"github.com/glassmonkey/bigquery-emulator/internal/logger"
+	"github.com/glassmonkey/bigquery-emulator/internal/metadata"
+	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
+	"github.com/glassmonkey/bigquery-emulator/types"
 	"github.com/parquet-go/parquet-go"
 )
 

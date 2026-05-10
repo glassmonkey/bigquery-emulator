@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	bigqueryemulator "github.com/goccy/bigquery-emulator"
-	"github.com/goccy/bigquery-emulator/server"
-	"github.com/goccy/bigquery-emulator/types"
+	bigqueryemulator "github.com/glassmonkey/bigquery-emulator"
+	"github.com/glassmonkey/bigquery-emulator/server"
+	"github.com/glassmonkey/bigquery-emulator/types"
 	"github.com/jessevdk/go-flags"
 )
 
