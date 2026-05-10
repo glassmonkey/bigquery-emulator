@@ -3,9 +3,9 @@
 #
 # Build the image from the top-level Dockerfile, verify that the
 # binary's --version flag works inside the container, start the
-# server, poll for readiness, hit a couple of REST endpoints, and
-# tear down. Intended for ad-hoc local verification and as the
-# manual checklist before tagging a release.
+# server, poll for readiness, run `SELECT 1` against the BigQuery
+# REST API, and tear down. Intended for ad-hoc local verification
+# and as the manual checklist before tagging a release.
 #
 # Usage:
 #   ./e2e/smoke.sh
@@ -23,6 +23,9 @@ cd "$dir"
 REVISION="${REVISION:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 READY_TIMEOUT="${READY_TIMEOUT:-30}"
 export REVISION
+
+PROJECT="test"
+HTTP="http://localhost:9050"
 
 log() {
   printf "==> %s\n" "$*"
@@ -43,15 +46,11 @@ docker compose run --rm --no-deps bigquery-emulator --version
 log "starting emulator"
 docker compose up -d
 
-log "waiting for http://localhost:9050 (timeout=${READY_TIMEOUT}s)"
+log "waiting for ${HTTP} (timeout=${READY_TIMEOUT}s)"
 ready=0
 for _ in $(seq 1 "${READY_TIMEOUT}"); do
-  # Any HTTP response (even 404) means the server is listening on the
-  # port. We do not assume a specific endpoint shape so the script
-  # stays compatible across emulator versions.
-  if curl -sf -o /dev/null -m 1 "http://localhost:9050/" \
-     || curl -s -o /dev/null -w '%{http_code}' -m 1 "http://localhost:9050/" 2>/dev/null \
-        | grep -qE '^[1-5][0-9][0-9]$'; then
+  # Any HTTP response means the server is listening on the port.
+  if curl -s -o /dev/null -m 1 "${HTTP}/"; then
     ready=1
     break
   fi
@@ -65,26 +64,28 @@ if [ "$ready" -ne 1 ]; then
 fi
 log "ready"
 
-log "probing discovery endpoint"
-discovery_url="http://localhost:9050/discovery/v1/apis/bigquery/v2/rest"
-discovery_status=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${discovery_url}" || true)
-log "discovery returned HTTP ${discovery_status}"
-if [ "${discovery_status}" != "200" ]; then
-  log "FAIL: discovery did not return 200"
+log "running SELECT 1 against /projects/${PROJECT}/queries"
+response="$(
+  curl -s -m 10 \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"SELECT 1 AS one","useLegacySql":false}' \
+    "${HTTP}/projects/${PROJECT}/queries"
+)"
+echo "${response}"
+
+# The synchronous query response shape is documented at
+# https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query;
+# rows[0].f[0].v carries the column value as a JSON string. Asserting
+# on the shape + value gives a real end-to-end signal (analyzer +
+# executor + serializer all on the happy path) rather than just
+# "the port is listening".
+if ! echo "${response}" | grep -q '"v"[[:space:]]*:[[:space:]]*"1"'; then
+  log "FAIL: SELECT 1 did not return a row with value \"1\""
+  log "recent emulator logs:"
   docker compose logs --tail=50 bigquery-emulator >&2 || true
   exit 1
 fi
 
-log "probing dataset list for project=test"
-datasets_url="http://localhost:9050/projects/test/datasets"
-datasets_status=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${datasets_url}" || true)
-log "datasets returned HTTP ${datasets_status}"
-# Empty dataset list is fine — we just want a 2xx so we know the
-# router and storage are wired up.
-if [ "${datasets_status}" -lt 200 ] || [ "${datasets_status}" -ge 300 ]; then
-  log "FAIL: dataset list did not return 2xx"
-  docker compose logs --tail=50 bigquery-emulator >&2 || true
-  exit 1
-fi
-
+log "SELECT 1 returned the expected row"
 log "SMOKE TEST PASSED"
