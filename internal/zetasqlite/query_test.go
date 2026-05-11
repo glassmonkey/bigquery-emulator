@@ -3539,7 +3539,6 @@ WITH email_addresses AS (
 		},
 		{
 			name: "regexp_extract with position and occurrence",
-			skipReason: "emulator: function signature mismatch on v0.9.0 (per-case triage post-v0.9.0 follow-up)",
 			query: `
 WITH example AS
  (
