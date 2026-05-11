@@ -377,49 +377,41 @@ UNION ALL
 		},
 		{
 			name:         "is distinct from with 1 and 2",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS DISTINCT FROM 2`,
 			expectedRows: [][]interface{}{{true}},
 		},
 		{
 			name:         "is distinct from with 1 and null",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS DISTINCT FROM NULL`,
 			expectedRows: [][]interface{}{{true}},
 		},
 		{
 			name:         "is not distinct from with 1 and 1",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS NOT DISTINCT FROM 1`,
 			expectedRows: [][]interface{}{{true}},
 		},
 		{
 			name:         "is not distinct from with null and null",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT NULL IS NOT DISTINCT FROM NULL`,
 			expectedRows: [][]interface{}{{true}},
 		},
 		{
 			name:         "is distinct from with null and null",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT NULL IS DISTINCT FROM NULL`,
 			expectedRows: [][]interface{}{{false}},
 		},
 		{
 			name:         "is distinct from with 1 and 1",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS DISTINCT FROM 1`,
 			expectedRows: [][]interface{}{{false}},
 		},
 		{
 			name:         "is not distinct from with 1 and 2",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS NOT DISTINCT FROM 2`,
 			expectedRows: [][]interface{}{{false}},
 		},
 		{
 			name:         "is not distinct from with 1 and null",
-			skipReason: "zetasql-wasm: IS DISTINCT FROM not yet enabled in WASM build (post-v0.7.0 follow-up)",
 			query:        `SELECT 1 IS NOT DISTINCT FROM NULL`,
 			expectedRows: [][]interface{}{{false}},
 		},
@@ -2943,7 +2935,6 @@ SELECT Roster.LastName, TeamMascot.Mascot FROM Roster FULL JOIN TeamMascot ON Ro
 		},
 		{
 			name: "qualify",
-			skipReason: "zetasql-wasm: QUALIFY language feature still gated in WASM build (post-v0.9.0 follow-up)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -2964,8 +2955,8 @@ FROM Produce WHERE Produce.category = 'vegetable' QUALIFY rank <= 3`,
 		},
 		// Regression test goccy/go-zetasqlite#123
 		{
-			name: "qualify without group by / where / having",
-			skipReason: "zetasql-wasm: QUALIFY language feature still gated in WASM build (post-v0.9.0 follow-up)",
+			name:       "qualify without group by / where / having",
+			skipReason: "zetasql-wasm: ZetaSQL upstream rejects QUALIFY without WHERE/GROUP BY/HAVING (\"QUALIFY clause must be used in conjunction with WHERE or GROUP BY or HAVING clause\"). BigQuery production accepts the standalone form; tracking upstream fix.",
 			query: `WITH toks AS (SELECT 1 AS x UNION ALL SELECT 2 AS x)
 			SELECT x FROM toks QUALIFY MAX(x) OVER (PARTITION BY x) > 1`,
 			expectedRows: [][]interface{}{
@@ -2975,7 +2966,6 @@ FROM Produce WHERE Produce.category = 'vegetable' QUALIFY rank <= 3`,
 		// Regression test goccy/go-zetasqlite#150
 		{
 			name: "qualify group",
-			skipReason: "zetasql-wasm: QUALIFY language feature still gated in WASM build (post-v0.9.0 follow-up)",
 			query: `
 				WITH produce AS (
 					SELECT 'kale' AS item, 23 AS purchases
@@ -3004,7 +2994,6 @@ FROM Produce WHERE Produce.category = 'vegetable' QUALIFY rank <= 3`,
 		},
 		{
 			name: "qualify direct",
-			skipReason: "zetasql-wasm: QUALIFY language feature still gated in WASM build (post-v0.9.0 follow-up)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
