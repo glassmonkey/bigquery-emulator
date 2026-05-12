@@ -3001,7 +3001,6 @@ SELECT item FROM Produce WHERE Produce.category = 'vegetable' QUALIFY RANK() OVE
 		},
 		{
 			name:        "invalid cast",
-			skipReason: "emulator: error text differs from expected on v0.9.0 (test-side update needed, post-v0.9.0 follow-up)",
 			query:       `SELECT CAST("apple" AS INT64) AS not_a_number`,
 			expectedErr: `failed to analyze: INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:13]`,
 		},

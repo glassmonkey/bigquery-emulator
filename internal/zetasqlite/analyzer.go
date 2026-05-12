@@ -268,6 +268,14 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 				return nil, fmt.Errorf("failed to analyze: %w", err)
 			}
 			stmtNode := out.Resolved
+			// zetasql-wasm v0.13.0 does not constant-fold a STRING literal
+			// → INT64 CAST at analyze time, so an unparseable literal like
+			// CAST("apple" AS INT64) reaches runtime and surfaces as a raw
+			// strconv error. Reject the literal cases here so the failure
+			// shape matches BigQuery / ZetaSQL upstream.
+			if err := rejectInvalidLiteralCast(stmtNode, ps.SQL); err != nil {
+				return nil, fmt.Errorf("failed to analyze: %w", err)
+			}
 			// Use the parsed AST that engine.Analyze returned (out.Parsed)
 			// rather than the one parseScript captured. The resolved →
 			// parsed reverse lookup (NodeMap.FindParsedNodes) only works
