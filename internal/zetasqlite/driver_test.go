@@ -61,7 +61,6 @@ CREATE VIEW IF NOT EXISTS SingerNames AS SELECT FirstName || ' ' || LastName AS 
 }
 
 func TestRegisterCustomDriver(t *testing.T) {
-	t.Skip("emulator: dashed table name (`project-id`) needs auto-backtick-quoting in the analyzer pre-pass; ZetaSQL parser rejects unquoted dashes (post-v0.8.0 follow-up)")
 	sql.Register("zetasqlite-custom", &ZetaSQLiteDriver{
 		ConnectHook: func(conn *ZetaSQLiteConn) error {
 			return conn.SetNamePath([]string{"project-id", "datasetID"})
