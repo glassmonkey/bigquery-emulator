@@ -639,9 +639,9 @@ FROM Items`,
 			expectedRows: [][]interface{}{{"apple"}},
 		},
 		{
-			name:  "any_value with window",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
-			query: `SELECT fruit, ANY_VALUE(fruit) OVER (ORDER BY LENGTH(fruit) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST(["apple", "banana", "pear"]) as fruit`,
+			name:       "any_value with window",
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
+			query:      `SELECT fruit, ANY_VALUE(fruit) OVER (ORDER BY LENGTH(fruit) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST(["apple", "banana", "pear"]) as fruit`,
 			expectedRows: [][]interface{}{
 				{"pear", "pear"},
 				{"apple", "pear"},
@@ -767,9 +767,9 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 			expectedRows: [][]interface{}{{float64(2.75)}},
 		},
 		{
-			name:  "avg with window",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
-			query: `SELECT x, AVG(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST([0, 2, NULL, 4, 4, 5]) AS x`,
+			name:       "avg with window",
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
+			query:      `SELECT x, AVG(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST([0, 2, NULL, 4, 4, 5]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, nil},
 				{int64(0), float64(0)},
@@ -840,9 +840,9 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 			expectedRows: [][]interface{}{{int64(0)}},
 		},
 		{
-			name:  "countif with window",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
-			query: `SELECT x, COUNTIF(x<0) OVER (ORDER BY ABS(x) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM UNNEST([5, -2, 3, 6, -10, NULL, -7, 4, 0]) AS x`,
+			name:       "countif with window",
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
+			query:      `SELECT x, COUNTIF(x<0) OVER (ORDER BY ABS(x) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM UNNEST([5, -2, 3, 6, -10, NULL, -7, 4, 0]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, int64(0)},
 				{int64(0), int64(1)},
@@ -1408,8 +1408,8 @@ FROM Produce`,
 		},
 
 		{
-			name: `window offset`,
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       `window offset`,
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1434,8 +1434,8 @@ FROM Produce`,
 			},
 		},
 		{
-			name: `window avg`,
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       `window avg`,
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1512,8 +1512,8 @@ FROM Produce`,
 			},
 		},
 		{
-			name: `window last_value with offset`,
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       `window last_value with offset`,
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1539,8 +1539,8 @@ FROM Produce`,
 			},
 		},
 		{
-			name: `window last_value with named window`,
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       `window last_value with named window`,
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1842,8 +1842,8 @@ FROM UNNEST(['c', NULL, 'b', 'a']) AS x`,
 			},
 		},
 		{
-			name: "window range",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       "window range",
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Farm AS
  (SELECT 'cat' as animal, 23 as population, 'mammal' as category
@@ -1960,8 +1960,8 @@ FROM Numbers`,
 			},
 		},
 		{
-			name: "window dense_rank with group",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			name:       "window dense_rank with group",
+			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH finishers AS
  (SELECT 'Sophia Liu' as name,
@@ -2955,8 +2955,7 @@ FROM Produce WHERE Produce.category = 'vegetable' QUALIFY rank <= 3`,
 		},
 		// Regression test goccy/go-zetasqlite#123
 		{
-			name:       "qualify without group by / where / having",
-			skipReason: "zetasql-wasm: ZetaSQL upstream rejects QUALIFY without WHERE/GROUP BY/HAVING (\"QUALIFY clause must be used in conjunction with WHERE or GROUP BY or HAVING clause\"). BigQuery production accepts the standalone form; tracking upstream fix.",
+			name: "qualify without group by / where / having",
 			query: `WITH toks AS (SELECT 1 AS x UNION ALL SELECT 2 AS x)
 			SELECT x FROM toks QUALIFY MAX(x) OVER (PARTITION BY x) > 1`,
 			expectedRows: [][]interface{}{
@@ -4041,7 +4040,6 @@ WITH example AS (
 
 		{
 			name:         "datetime_trunc with quarter",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_TRUNC(DATETIME "2017-01-05", QUARTER), DATETIME_TRUNC(DATETIME "2017-02-05", QUARTER), DATETIME_TRUNC(DATETIME "2017-08-05", QUARTER), DATETIME_TRUNC(DATETIME "2017-11-05", QUARTER), DATETIME_TRUNC(DATETIME "2017-12-31", QUARTER)`,
 			expectedRows: [][]interface{}{{"2017-01-01T00:00:00", "2017-01-01T00:00:00", "2017-07-01T00:00:00", "2017-10-01T00:00:00", "2017-10-01T00:00:00"}},
 		},
@@ -4058,13 +4056,11 @@ WITH example AS (
 		},
 		{
 			name:         "datetime_trunc with day weekday",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_TRUNC(DATETIME "2024-03-29", WEEK(MONDAY))`,
 			expectedRows: [][]interface{}{{"2024-03-25T00:00:00"}},
 		},
 		{
 			name: "datetime_trunc isoyear",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT
   DATETIME_TRUNC('2015-06-15', ISOYEAR) AS isoyear_boundary,
   EXTRACT(ISOYEAR FROM DATE '2015-06-15') AS isoyear_number;
@@ -4249,7 +4245,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name: "datetime_diff with week day",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT 
   DATETIME_DIFF(DATETIME '2024-03-19', DATETIME '2024-03-24', WEEK(SUNDAY)),
   DATETIME_DIFF(DATETIME '2024-03-19', DATETIME '2024-03-24', WEEK(MONDAY)),
@@ -4272,7 +4267,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name: "datetime_diff with week day 1 week",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT 
 	DATETIME_DIFF(DATETIME '2024-02-21', DATETIME '2024-02-29', WEEK(MONDAY))`,
 			expectedRows: [][]interface{}{{
@@ -4281,7 +4275,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:  "datetime_diff with week day",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT DATETIME_DIFF(DATETIME '2024-03-19', DATETIME '2024-03-25', WEEK(MONDAY))`,
 			expectedRows: [][]interface{}{{
 				// -1 Monday occurred between 2024-03-19 and 2024-03-25
@@ -4290,7 +4283,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name: "timestamp diff with week day",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT 
   TIMESTAMP_DIFF(DATETIME '2024-03-19', DATETIME '2024-03-24', WEEK(SUNDAY)),
   TIMESTAMP_DIFF(DATETIME '2024-03-19', DATETIME '2024-03-24', WEEK(MONDAY)),
@@ -4520,7 +4512,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:  "datetime_add",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT DATETIME "2008-12-25 15:30:00", DATETIME_ADD(DATETIME "2008-12-25 15:30:00", INTERVAL 10 MINUTE)`,
 			expectedRows: [][]interface{}{
 				{"2008-12-25T15:30:00", "2008-12-25T15:40:00"},
@@ -4528,13 +4519,11 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:         "datetime_add",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_ADD(DATETIME '2023-01-29 00:00:00', INTERVAL 1 MONTH)`,
 			expectedRows: [][]interface{}{{"2023-02-28T00:00:00"}},
 		},
 		{
 			name:  "datetime_sub",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `SELECT DATETIME "2008-12-25 15:30:00", DATETIME_SUB(DATETIME "2008-12-25 15:30:00", INTERVAL 10 MINUTE)`,
 			expectedRows: [][]interface{}{
 				{"2008-12-25T15:30:00", "2008-12-25T15:20:00"},
@@ -4542,85 +4531,71 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:         "datetime_sub",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_SUB(DATETIME '2023-03-31 00:00:00', INTERVAL 1 MONTH)`,
 			expectedRows: [][]interface{}{{"2023-02-28T00:00:00"}},
 		},
 		{
 			name:         "datetime_diff with day",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_DIFF(DATETIME "2010-07-07 10:20:00", DATETIME "2008-12-25 15:30:00", DAY)`,
 			expectedRows: [][]interface{}{{int64(559)}},
 		},
 		{
 			name:         "datetime_diff with week",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_DIFF(DATETIME '2017-10-15 00:00:00', DATETIME '2017-10-14 00:00:00', WEEK)`,
 			expectedRows: [][]interface{}{{int64(1)}},
 		},
 		{
 			name:         "datetime_diff with year, ISOYEAR",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_DIFF('2017-12-30 00:00:00', '2014-12-30 00:00:00', YEAR), DATETIME_DIFF('2017-12-30 00:00:00', '2014-12-30 00:00:00', ISOYEAR)`,
 			expectedRows: [][]interface{}{{int64(3), int64(2)}},
 		},
 		{
 			name:         "datetime_diff with isoweek",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_DIFF('2017-12-18', '2017-12-17', WEEK), DATETIME_DIFF('2017-12-18', '2017-12-17', WEEK(MONDAY)), DATETIME_DIFF('2017-12-18', '2017-12-17', ISOWEEK)`,
 			expectedRows: [][]interface{}{{int64(0), int64(1), int64(1)}},
 		},
 		{
 			name:         "datetime_trunc with day",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_TRUNC(DATETIME "2008-12-25 15:30:00", DAY)`,
 			expectedRows: [][]interface{}{{"2008-12-25T00:00:00"}},
 		},
 		{
 			name:         "datetime_trunc with weekday(monday)",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_TRUNC(DATETIME "2017-11-05 00:00:00", WEEK(MONDAY))`,
 			expectedRows: [][]interface{}{{"2017-10-30T00:00:00"}},
 		},
 		{
 			name:         "datetime_trunc with isoyear",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT DATETIME_TRUNC('2015-06-15 00:00:00', ISOYEAR)`,
 			expectedRows: [][]interface{}{{"2014-12-29T00:00:00"}},
 		},
 		{
 			name:         "format_datetime with %c",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%c", DATETIME "2008-12-25 15:30:00")`,
 			expectedRows: [][]interface{}{{"Thu Dec 25 15:30:00 2008"}},
 		},
 		{
 			name:         "format_datetime with %b-%d-%Y",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%b-%d-%Y", DATETIME "2008-12-25 15:30:00")`,
 			expectedRows: [][]interface{}{{"Dec-25-2008"}},
 		},
 		{
 			name:         "format_datetime with %b %Y",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%b %Y", DATETIME "2008-12-25 15:30:00")`,
 			expectedRows: [][]interface{}{{"Dec 2008"}},
 		},
 		{
 			name:         "format_datetime with %E3S",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%E3S", DATETIME "2008-12-25 15:30:12.345678")`,
 			expectedRows: [][]interface{}{{"12.345"}},
 		},
 		{
 			name:         "format_datetime with %E*S",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%E*S", DATETIME "2008-12-25 15:30:12.345678")`,
 			expectedRows: [][]interface{}{{"12.345678"}},
 		},
 		{
 			name:         "format_datetime with %E4Y",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_DATETIME("%E4Y", DATETIME "2008-12-25 15:30:12.345678")`,
 			expectedRows: [][]interface{}{{"2008"}},
 		},
@@ -4667,31 +4642,26 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:         "time from datetime",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIME(DATETIME "2008-12-25 15:30:00.000000")`,
 			expectedRows: [][]interface{}{{"15:30:00"}},
 		},
 		{
 			name:         "time_add",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIME_ADD(TIME "15:30:00", INTERVAL 10 MINUTE)`,
 			expectedRows: [][]interface{}{{"15:40:00"}},
 		},
 		{
 			name:         "time_sub",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIME_SUB(TIME "15:30:00", INTERVAL 10 MINUTE)`,
 			expectedRows: [][]interface{}{{"15:20:00"}},
 		},
 		{
 			name:         "time_diff",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIME_DIFF(TIME "15:30:00", TIME "14:35:00", MINUTE)`,
 			expectedRows: [][]interface{}{{int64(55)}},
 		},
 		{
 			name:         "time_trunc",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIME_TRUNC(TIME "15:30:00", HOUR)`,
 			expectedRows: [][]interface{}{{"15:00:00"}},
 		},
@@ -4713,25 +4683,21 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:         "format_time with %k %l",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_TIME("%k", TIME "15:30:00"), FORMAT_TIME("%l", TIME "15:30:00");`,
 			expectedRows: [][]interface{}{{"15", " 3"}},
 		},
 		{
 			name:         "format_time with %R",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_TIME("%R", TIME "15:30:00")`,
 			expectedRows: [][]interface{}{{"15:30"}},
 		},
 		{
 			name:         "format_time with %E3S",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_TIME("%E3S", TIME "15:30:12.345678")`,
 			expectedRows: [][]interface{}{{"12.345"}},
 		},
 		{
 			name:         "format_time with %E*S",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT_TIME("%E*S", TIME "15:30:12.345678")`,
 			expectedRows: [][]interface{}{{"12.345678"}},
 		},
@@ -4806,7 +4772,6 @@ SELECT date, EXTRACT(ISOYEAR FROM date), EXTRACT(YEAR FROM date), EXTRACT(MONTH 
 		},
 		{
 			name:         "timestamp from datetime",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT TIMESTAMP(DATETIME "2008-12-25 15:30:00")`,
 			expectedRows: [][]interface{}{{createTimestampFormatFromString("2008-12-25 15:30:00+00")}},
 		},
@@ -5010,7 +4975,6 @@ FROM Input`,
 		},
 		{
 			name: "interval from sub operator",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
 			query: `
 SELECT
   DATE "2021-05-20" - DATE "2020-04-19",
@@ -5057,7 +5021,7 @@ SELECT
 		// numeric/bignumeric
 		{
 			name:         "cast numeric and bignumeric",
-			skipReason: "emulator: result mismatch on v0.9.0 (output differs from BigQuery; per-case triage post-v0.9.0 follow-up)",
+			skipReason:   "emulator: NUMERIC/BIGNUMERIC cast representation drift (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/40)",
 			query:        `SELECT cast('12.4E17' as NUMERIC) numeric, cast('12.4E37' as BIGNUMERIC) bignumeric`,
 			expectedRows: [][]interface{}{{"1240000000000000000", "124000000000000000000000000000000000000"}},
 		},
