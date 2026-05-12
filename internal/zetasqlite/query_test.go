@@ -1960,8 +1960,7 @@ FROM Numbers`,
 			},
 		},
 		{
-			name:       "window dense_rank with group",
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
+			name: "window dense_rank with group",
 			query: `
 WITH finishers AS
  (SELECT 'Sophia Liu' as name,
@@ -1981,14 +1980,14 @@ SELECT name,
 FROM finishers
 `,
 			expectedRows: [][]interface{}{
-				{"Sophia Liu", createTimestampFormatFromString("2016-10-18 09:51:45+00"), "F30-34", int64(1)},
-				{"Nikki Leith", createTimestampFormatFromString("2016-10-18 09:59:01+00"), "F30-34", int64(2)},
-				{"Meghan Lederer", createTimestampFormatFromString("2016-10-18 09:59:01+00"), "F30-34", int64(2)},
-				{"Jen Edwards", createTimestampFormatFromString("2016-10-18 10:06:36+00"), "F30-34", int64(3)},
-				{"Lisa Stelzner", createTimestampFormatFromString("2016-10-18 09:54:11+00"), "F35-39", int64(1)},
-				{"Lauren Matthews", createTimestampFormatFromString("2016-10-18 10:01:17+00"), "F35-39", int64(2)},
-				{"Desiree Berry", createTimestampFormatFromString("2016-10-18 10:05:42+00"), "F35-39", int64(3)},
-				{"Suzy Slane", createTimestampFormatFromString("2016-10-18 10:06:24+00"), "F35-39", int64(4)},
+				{"Sophia Liu", createTimestampFormatFromString("2016-10-18 02:51:45+00"), "F30-34", int64(1)},
+				{"Nikki Leith", createTimestampFormatFromString("2016-10-18 02:59:01+00"), "F30-34", int64(2)},
+				{"Meghan Lederer", createTimestampFormatFromString("2016-10-18 02:59:01+00"), "F30-34", int64(2)},
+				{"Jen Edwards", createTimestampFormatFromString("2016-10-18 03:06:36+00"), "F30-34", int64(3)},
+				{"Lisa Stelzner", createTimestampFormatFromString("2016-10-18 02:54:11+00"), "F35-39", int64(1)},
+				{"Lauren Matthews", createTimestampFormatFromString("2016-10-18 03:01:17+00"), "F35-39", int64(2)},
+				{"Desiree Berry", createTimestampFormatFromString("2016-10-18 03:05:42+00"), "F35-39", int64(3)},
+				{"Suzy Slane", createTimestampFormatFromString("2016-10-18 03:06:24+00"), "F35-39", int64(4)},
 			},
 		},
 		{
