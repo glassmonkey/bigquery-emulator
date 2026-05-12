@@ -1,6 +1,7 @@
 package zetasqlite
 
 import (
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -9,6 +10,32 @@ import (
 	"github.com/glassmonkey/zetasql-wasm/types"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// mustRat parses a decimal string into a *big.Rat or fails the test.
+// Helper is trivially correct (single SetString call, no branches that
+// produce a return value): R9.
+func mustRat(t *testing.T, s string) *big.Rat {
+	t.Helper()
+	r, ok := new(big.Rat).SetString(s)
+	if !ok {
+		t.Fatalf("mustRat(%q): SetString returned ok=false", s)
+	}
+	return r
+}
+
+// assertNumericValueEqual compares the rational *value* (via big.Rat.Cmp,
+// which ignores the internal big.Int normalisation that reflect.DeepEqual
+// is sensitive to) and the isBigNumeric flag. Fail-only, no fallback
+// return, no result computation: R9.
+func assertNumericValueEqual(t *testing.T, got, want *NumericValue) {
+	t.Helper()
+	if got.Rat.Cmp(want.Rat) != 0 {
+		t.Fatalf("rat: got %s, want %s", got.Rat.String(), want.Rat.String())
+	}
+	if got.isBigNumeric != want.isBigNumeric {
+		t.Fatalf("isBigNumeric: got %v, want %v", got.isBigNumeric, want.isBigNumeric)
+	}
+}
 
 // TestValueFromZetaSQLValue locks in the lift for kinds whose Go
 // representation in *types.LiteralValue does not pass cleanly through
@@ -190,6 +217,87 @@ func TestIntervalValueFromZetaSQLBytes(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
+		})
+	}
+}
+
+// TestNumericValueFromZetaSQLBytes locks in the proto-encoded NUMERIC
+// payload decode: a little-endian two's-complement signed integer scaled
+// by 10^9. Cases cover the empty-bytes branch, the smallest unit, the
+// integration-regression bytes from issue #40, and the sign-bit branch.
+func TestNumericValueFromZetaSQLBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bytes []byte
+		want  *NumericValue
+	}{
+		{
+			name:  "empty bytes lift to zero",
+			bytes: nil,
+			want:  &NumericValue{Rat: new(big.Rat)},
+		},
+		{
+			name:  "smallest positive unit (10^-9)",
+			bytes: []byte{0x01},
+			want:  &NumericValue{Rat: mustRat(t, "1/1000000000")},
+		},
+		{
+			name:  "1.24e18 (issue #40 regression)",
+			bytes: []byte{0, 0, 0, 216, 3, 159, 176, 177, 54, 180, 1, 4},
+			want:  &NumericValue{Rat: mustRat(t, "1240000000000000000")},
+		},
+		{
+			name:  "single 0xFF lifts to -10^-9 via two's-complement",
+			bytes: []byte{0xFF},
+			want:  &NumericValue{Rat: mustRat(t, "-1/1000000000")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Act
+			got := numericValueFromZetaSQLBytes(tc.bytes)
+
+			// Assert
+			assertNumericValueEqual(t, got, tc.want)
+		})
+	}
+}
+
+// TestBigNumericValueFromZetaSQLBytes mirrors TestNumericValueFromZetaSQLBytes
+// for the BIGNUMERIC variant: same little-endian two's-complement wire
+// encoding, scale is 10^38, and the lift sets isBigNumeric=true.
+func TestBigNumericValueFromZetaSQLBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bytes []byte
+		want  *NumericValue
+	}{
+		{
+			name:  "empty bytes lift to zero with isBigNumeric flag",
+			bytes: nil,
+			want:  &NumericValue{Rat: new(big.Rat), isBigNumeric: true},
+		},
+		{
+			name:  "smallest positive unit (10^-38)",
+			bytes: []byte{0x01},
+			want:  &NumericValue{Rat: mustRat(t, "1/100000000000000000000000000000000000000"), isBigNumeric: true},
+		},
+		{
+			name:  "1.24e38 (issue #40 regression)",
+			bytes: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 112, 82, 161, 53, 11, 238, 96, 140, 184, 94, 83, 49, 60, 12, 132, 183, 231, 107, 175, 186, 38, 106, 27},
+			want:  &NumericValue{Rat: mustRat(t, "124000000000000000000000000000000000000"), isBigNumeric: true},
+		},
+		{
+			name:  "single 0xFF lifts to -10^-38 via two's-complement",
+			bytes: []byte{0xFF},
+			want:  &NumericValue{Rat: mustRat(t, "-1/100000000000000000000000000000000000000"), isBigNumeric: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Act
+			got := bigNumericValueFromZetaSQLBytes(tc.bytes)
+
+			// Assert
+			assertNumericValueEqual(t, got, tc.want)
 		})
 	}
 }

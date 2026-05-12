@@ -198,6 +198,12 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 			return intervalValueFromZetaSQLBytes(b)
 		}
 	}
+	if b, ok := v.AsNumeric(); ok {
+		return numericValueFromZetaSQLBytes(b), nil
+	}
+	if b, ok := v.AsBigNumeric(); ok {
+		return bigNumericValueFromZetaSQLBytes(b), nil
+	}
 	switch elts := v.Value.(type) {
 	case types.ArrayValue:
 		arr := &ArrayValue{}
@@ -331,6 +337,40 @@ func timestampValueFromLiteral(t time.Time) (TimestampValue, error) {
 var (
 	numericLiteralPattern = regexp.MustCompile(`NUMERIC "(.+)"`)
 )
+
+// numericValueFromZetaSQLBytes decodes the proto-encoded NUMERIC payload
+// that LiteralValue.AsNumeric returns: a little-endian two's-complement
+// signed integer equal to the value scaled by 10^9. Empty slice = zero.
+func numericValueFromZetaSQLBytes(b []byte) *NumericValue {
+	return &NumericValue{Rat: ratFromScaledLEBytes(b, 9)}
+}
+
+// bigNumericValueFromZetaSQLBytes mirrors numericValueFromZetaSQLBytes for
+// BIGNUMERIC literals; the wire encoding is identical, the scale is 10^38.
+func bigNumericValueFromZetaSQLBytes(b []byte) *NumericValue {
+	return &NumericValue{Rat: ratFromScaledLEBytes(b, 38), isBigNumeric: true}
+}
+
+// ratFromScaledLEBytes decodes a little-endian two's-complement signed
+// integer into a *big.Rat divided by 10^scaleDigits. Empty slice = zero.
+// It is the shared primitive behind the NUMERIC / BIGNUMERIC literal
+// lifts; the scale belongs to those callers, not here.
+func ratFromScaledLEBytes(b []byte, scaleDigits int) *big.Rat {
+	if len(b) == 0 {
+		return new(big.Rat)
+	}
+	be := make([]byte, len(b))
+	for i, x := range b {
+		be[len(b)-1-i] = x
+	}
+	z := new(big.Int).SetBytes(be)
+	if be[0]&0x80 != 0 {
+		twoPow := new(big.Int).Lsh(big.NewInt(1), uint(8*len(b)))
+		z.Sub(z, twoPow)
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits)), nil)
+	return new(big.Rat).SetFrac(z, scale)
+}
 
 func numericValueFromLiteral(lit string) (*NumericValue, error) {
 	matches := numericLiteralPattern.FindAllStringSubmatch(lit, -1)

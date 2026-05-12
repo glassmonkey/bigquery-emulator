@@ -5033,7 +5033,6 @@ SELECT
 		// numeric/bignumeric
 		{
 			name:         "cast numeric and bignumeric",
-			skipReason:   "emulator: NUMERIC/BIGNUMERIC cast representation drift (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/40)",
 			query:        `SELECT cast('12.4E17' as NUMERIC) numeric, cast('12.4E37' as BIGNUMERIC) bignumeric`,
 			expectedRows: [][]interface{}{{"1240000000000000000", "124000000000000000000000000000000000000"}},
 		},
