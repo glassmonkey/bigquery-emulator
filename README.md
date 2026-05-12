@@ -322,6 +322,50 @@ When the encoded data is read back, a custom function registered with go-sqlite3
 > Diagram credit: original by [@goccy](https://github.com/goccy); the encoding strategy is unchanged in this fork.
 
 
+# Observability
+
+The emulator can export OpenTelemetry traces over OTLP/gRPC. Tracing is **off by default** — the SDK only initialises when an endpoint is supplied, so unconfigured builds carry no tracing overhead.
+
+## Enable from the CLI
+
+```
+bigquery-emulator --project=test --otel-endpoint=otel-collector:4317
+# or via env
+BIGQUERY_EMULATOR_OTEL_ENDPOINT=otel-collector:4317 bigquery-emulator --project=test
+```
+
+`--otel-endpoint=""` (empty, the default) leaves the no-op tracer in place.
+
+## Enable from a library embedder
+
+```go
+srv, _ := server.New(server.MemoryStorage)
+if err := srv.SetOTel(ctx, "otel-collector:4317"); err != nil {
+    log.Fatal(err)
+}
+// SetOTel is idempotent and accepts "" to revert to no-op.
+```
+
+## Bundled collector (docker compose)
+
+A pre-wired OpenTelemetry Collector with the `fileexporter` is shipped behind the `otel` compose profile. It is off in the default `make docker/up` flow.
+
+```
+BIGQUERY_EMULATOR_OTEL_ENDPOINT=otel-collector:4317 \
+  docker compose -f e2e/compose.yml --profile otel up -d
+```
+
+Spans land in `e2e/otel-output/traces.jsonl` (one OTLP-JSON `resourceSpans` document per line) via the bind mount declared on the collector service. The directory is tracked via `.gitkeep`; the file itself is gitignored.
+
+## What is instrumented
+
+- `tracingMiddleware` wraps every HTTP request with an `otelhttp` server span (parent), then injects the server's tracer into `ctx` so handlers can pull a tracer through `tracing.FromContext(ctx)` and open child spans without depending on a global `TracerProvider`.
+- `sequentialAccessMiddleware` records its lock-wait time on the request span as `bqemu.mutex.wait_ms`. The whole emulator is gated behind one mutex, so this attribute is the single biggest knob for explaining tail latency under concurrent load.
+- The hot-path job handlers (`server.jobs.insert`, `server.jobs.get`, `server.jobs.getQueryResults`, `server.jobs.query`, `server.jobs.list`) and the cross-cutting lookups in `withProjectMiddleware` / `withJobMiddleware` open named child spans with `bqemu.project`, `bqemu.job_id`, etc. attached.
+- Custom spans from caller code: `tracing.Start(ctx, "your.span")` returns the new ctx and an `EndFunc(*error)` that records the error and closes the span. `defer end(&err)` together with a named-return `err` is the intended use.
+
+A real-world example of using these spans to attribute a regression lives at [#90](https://github.com/glassmonkey/bigquery-emulator/issues/90).
+
 # Reference
 
 Regarding the story of bigquery-emulator, there are the following articles.

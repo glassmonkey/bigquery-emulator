@@ -22,7 +22,28 @@ services:
       - "9060:9060"
     volumes:
       - ./testdata/fixture:/fixture:ro
+    # BIGQUERY_EMULATOR_OTEL_ENDPOINT is honoured by the CLI flag
+    # of the same name; default empty means tracing is no-op. Set
+    # to "otel-collector:4317" together with `--profile otel` to
+    # ship spans to the bundled collector → fileexporter.
+    environment:
+      BIGQUERY_EMULATOR_OTEL_ENDPOINT: ${BIGQUERY_EMULATOR_OTEL_ENDPOINT:-}
     command:
       - "--project=test"
       - "--data-from-yaml=/fixture/combined.yml"
       - "--log-level=info"
+
+  # Bundled OpenTelemetry Collector that receives OTLP traces from
+  # the emulator and writes them as JSON lines to e2e/otel-output/
+  # via fileexporter. Off by default; enable with
+  #   BIGQUERY_EMULATOR_OTEL_ENDPOINT=otel-collector:4317 \
+  #   docker compose -f e2e/compose.yml --profile otel up -d
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.119.0
+    profiles: ["otel"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      - ./otel-output:/var/log/otel
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"

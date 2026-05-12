@@ -10,6 +10,13 @@ import (
 	"os"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -21,17 +28,20 @@ import (
 )
 
 type Server struct {
-	Handler      http.Handler
-	storage      Storage
-	db           *sql.DB
-	loggerConfig *zap.Config
-	logger       *zap.Logger
-	connMgr      *connection.Manager
-	metaRepo     *metadata.Repository
-	contentRepo  *contentdata.Repository
-	fileCleanup  func() error
-	httpServer   *http.Server
-	grpcServer   *grpc.Server
+	Handler        http.Handler
+	storage        Storage
+	db             *sql.DB
+	loggerConfig   *zap.Config
+	logger         *zap.Logger
+	connMgr        *connection.Manager
+	metaRepo       *metadata.Repository
+	contentRepo    *contentdata.Repository
+	fileCleanup    func() error
+	httpServer     *http.Server
+	grpcServer     *grpc.Server
+	tracerProvider trace.TracerProvider
+	tracer         trace.Tracer
+	otelShutdown   func(context.Context) error
 }
 
 func New(storage Storage) (*Server, error) {
@@ -65,6 +75,8 @@ func New(storage Storage) (*Server, error) {
 		return nil, fmt.Errorf("invalid default logger config: %w", err)
 	}
 	server.logger = zap.NewNop()
+	server.tracerProvider = tracenoop.NewTracerProvider()
+	server.tracer = server.tracerProvider.Tracer(tracerScope)
 	metaRepo, err := metadata.NewRepository(db)
 	if err != nil {
 		return nil, err
@@ -83,6 +95,7 @@ func New(storage Storage) (*Server, error) {
 	r.Handle(uploadAPIEndpoint, &uploadHandler{}).Methods("POST")
 	r.Handle(uploadAPIEndpoint, &uploadContentHandler{}).Methods("PUT")
 	r.PathPrefix("/").Handler(&defaultHandler{})
+	r.Use(tracingMiddleware(server))
 	r.Use(sequentialAccessMiddleware())
 	r.Use(recoveryMiddleware(server))
 	r.Use(loggerMiddleware(server))
@@ -107,10 +120,74 @@ func (s *Server) Close() error {
 			}
 		}
 	}()
+	if s.otelShutdown != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.otelShutdown(ctx); err != nil {
+			log.Printf("failed to shutdown otel tracer provider: %s", err.Error())
+		}
+		cancel()
+	}
 	if err := s.db.Close(); err != nil {
 		log.Printf("failed to close database: %s", err.Error())
 		return err
 	}
+	return nil
+}
+
+// tracerScope is the instrumentation name used for span sources
+// created from the emulator itself. Distinct from any scope a
+// user (or a downstream package like zetasqlite) may pick.
+const tracerScope = "github.com/glassmonkey/bigquery-emulator/server"
+
+// SetOTel wires up an OTLP gRPC trace exporter pointed at
+// `endpoint` (e.g. "otel-collector:4317") and replaces the
+// no-op tracer with one backed by the real provider. Existing
+// HTTP middleware picks the new tracer up through s.tracer.
+//
+// Idempotent: a second call shuts down the previous provider
+// before installing the new one. Pass an empty endpoint to
+// revert to a no-op tracer (useful for tests that opt out
+// after setup).
+func (s *Server) SetOTel(ctx context.Context, endpoint string) error {
+	if s.otelShutdown != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = s.otelShutdown(shutdownCtx)
+		cancel()
+		s.otelShutdown = nil
+	}
+	if endpoint == "" {
+		s.tracerProvider = tracenoop.NewTracerProvider()
+		s.tracer = s.tracerProvider.Tracer(tracerScope)
+		return nil
+	}
+	exporter, err := otlptracegrpc.New(
+		ctx,
+		otlptracegrpc.WithEndpoint(endpoint),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		return fmt.Errorf("otlp trace exporter: %w", err)
+	}
+	// Pin service.name so spans land under a recognisable name in
+	// downstream tools instead of "unknown_service:bigquery-emulator".
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewSchemaless(
+			semconv.ServiceName("bigquery-emulator"),
+			attribute.String("service.namespace", "bigquery-emulator"),
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("otlp resource: %w", err)
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(res),
+	)
+	s.tracerProvider = tp
+	s.tracer = tp.Tracer(tracerScope)
+	s.otelShutdown = tp.Shutdown
 	return nil
 }
 
