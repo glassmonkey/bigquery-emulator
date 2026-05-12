@@ -123,6 +123,13 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 	opt.Language = langOpt
 	pl := zetasql.ParseLocationRecordFullNodeScope
 	opt.ParseLocationRecordType = &pl
+	// BigQuery rejects CAST(literal AS Type) at analyze time when the
+	// literal cannot be parsed (e.g. CAST("apple" AS INT64)); upstream
+	// ZetaSQL 2025.x leaves the cast unfolded for runtime instead. The
+	// emulator targets BigQuery semantics, so opt into the library-
+	// provided gate that surfaces *types.CastValueError on those
+	// failures (see zetasql-wasm v0.14.0 and types.CastValueError doc).
+	opt.RejectInvalidLiteralCasts = true
 	return opt, nil
 }
 
@@ -870,3 +877,4 @@ func getArgsFromParams(values []driver.NamedValue, params []*ast.ParameterNode) 
 	}
 	return args, nil
 }
+
