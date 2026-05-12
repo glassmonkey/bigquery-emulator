@@ -640,7 +640,6 @@ FROM Items`,
 		},
 		{
 			name:       "any_value with window",
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query:      `SELECT fruit, ANY_VALUE(fruit) OVER (ORDER BY LENGTH(fruit) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST(["apple", "banana", "pear"]) as fruit`,
 			expectedRows: [][]interface{}{
 				{"pear", "pear"},
@@ -768,7 +767,6 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 		},
 		{
 			name:       "avg with window",
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query:      `SELECT x, AVG(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST([0, 2, NULL, 4, 4, 5]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, nil},
@@ -841,7 +839,6 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 		},
 		{
 			name:       "countif with window",
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query:      `SELECT x, COUNTIF(x<0) OVER (ORDER BY ABS(x) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM UNNEST([5, -2, 3, 6, -10, NULL, -7, 4, 0]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, int64(0)},
@@ -1409,7 +1406,6 @@ FROM Produce`,
 
 		{
 			name:       `window offset`,
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1435,7 +1431,6 @@ FROM Produce`,
 		},
 		{
 			name:       `window avg`,
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1513,7 +1508,6 @@ FROM Produce`,
 		},
 		{
 			name:       `window last_value with offset`,
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1540,7 +1534,6 @@ FROM Produce`,
 		},
 		{
 			name:       `window last_value with named window`,
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1843,7 +1836,6 @@ FROM UNNEST(['c', NULL, 'b', 'a']) AS x`,
 		},
 		{
 			name:       "window range",
-			skipReason: "emulator: window function result mismatch (post-v0.11.3 follow-up, see https://github.com/glassmonkey/bigquery-emulator/issues/37)",
 			query: `
 WITH Farm AS
  (SELECT 'cat' as animal, 23 as population, 'mammal' as category

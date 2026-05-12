@@ -425,15 +425,18 @@ func (n *AnalyticFunctionCallNode) getWindowBoundaryOptionFuncSQL(ctx context.Co
 		}
 		return getWindowBoundaryEndOptionFuncSQL(typ, ""), nil
 	case ast.OffsetPrecedingType, ast.OffsetFollowingType:
-		// TODO(zetasql-wasm-migration): expr.Expression carries the OFFSET
-		// literal as a wrapped ExprNode. Pulling it out as SQL still
-		// requires walking that subtree through newNode/FormatSQL; until
-		// that path is wired, the boundary keeps its placeholder string.
-		_ = expr.Expression
-		if isStart {
-			return getWindowBoundaryStartOptionFuncSQL(typ, ""), nil
+		offsetSQL := ""
+		if expr.Expression != nil {
+			s, err := newNode(expr.Expression).FormatSQL(ctx)
+			if err != nil {
+				return "", err
+			}
+			offsetSQL = s
 		}
-		return getWindowBoundaryEndOptionFuncSQL(typ, ""), nil
+		if isStart {
+			return getWindowBoundaryStartOptionFuncSQL(typ, offsetSQL), nil
+		}
+		return getWindowBoundaryEndOptionFuncSQL(typ, offsetSQL), nil
 	}
 	return "", fmt.Errorf("unexpected boundary type %d", typ)
 }
