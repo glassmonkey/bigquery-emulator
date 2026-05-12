@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/bigquery"
 	ast "github.com/glassmonkey/zetasql-wasm/resolved_ast"
 	"github.com/glassmonkey/zetasql-wasm/types"
 	"github.com/goccy/go-json"
@@ -184,6 +186,18 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 	if name, ok := v.AsEnumName(); ok {
 		return StringValue(name), nil
 	}
+	// INTERVAL has no typed accessor on LiteralValue yet (the upstream
+	// proto stores it as the 16-byte SerializeAndAppendToBytes payload —
+	// see zetasql/public/interval_value.cc). Detect it by Type.Kind so
+	// the downstream UDFs see IntervalValue rather than the raw bytes
+	// (without this, the default `[]byte` branch in ValueFromGoValue
+	// lifts it as BytesValue and the date arithmetic / EXTRACT /
+	// JUSTIFY_INTERVAL binds reject "zetasqlite.BytesValue").
+	if v.Type != nil && v.Type.Kind() == types.Interval {
+		if b, ok := v.Value.([]byte); ok {
+			return intervalValueFromZetaSQLBytes(b)
+		}
+	}
 	switch elts := v.Value.(type) {
 	case types.ArrayValue:
 		arr := &ArrayValue{}
@@ -353,6 +367,70 @@ func intervalValueFromLiteral(lit string) (*IntervalValue, error) {
 	}
 	intervalLit := matches[0][1]
 	return parseInterval(intervalLit)
+}
+
+// intervalValueFromZetaSQLBytes lifts the 16-byte little-endian
+// IntervalValue serialization (zetasql/public/interval_value.cc's
+// SerializeAndAppendToBytes) into the fork's IntervalValue. Layout:
+//
+//	bytes[0:8]   int64  micros        (LE, signed)
+//	bytes[8:12]  int32  days          (LE, signed)
+//	bytes[12:16] uint32 months_nanos  (LE, packed)
+//
+// months_nanos packs the absolute month count in bits 13..30 with the
+// sign in bit 31, and the nano-fraction part (0..999) in bits 0..9.
+// The masks match the upstream constants (kMonthSignMask 0x80000000,
+// kMonthsMask 0x7FFFE000, kMonthsShift 13, kNanosMask 0x000003FF).
+//
+// The decoded parts are folded into bigquery.IntervalValue's Y/M/D and
+// H:M:S.nanos buckets with consistent signs within each sign-group
+// (Y-M shares a sign, D is independent, H:M:S.nanos shares a sign), so
+// the existing IntervalValue downstream (UDFs, formatter) sees the
+// same shape it gets from parseInterval / CastValue's Interval branch.
+func intervalValueFromZetaSQLBytes(b []byte) (*IntervalValue, error) {
+	const expectedLen = 16
+	if len(b) == 0 {
+		// Upstream treats an empty serialization as the zero interval.
+		return &IntervalValue{IntervalValue: &bigquery.IntervalValue{}}, nil
+	}
+	if len(b) != expectedLen {
+		return nil, fmt.Errorf("interval bytes: expected %d bytes, got %d", expectedLen, len(b))
+	}
+
+	micros := int64(binary.LittleEndian.Uint64(b[0:8]))
+	days := int32(binary.LittleEndian.Uint32(b[8:12]))
+	monthsNanos := binary.LittleEndian.Uint32(b[12:16])
+
+	monthsAbs := int64((monthsNanos & 0x7FFFE000) >> 13)
+	months := monthsAbs
+	if monthsNanos&0x80000000 != 0 {
+		months = -monthsAbs
+	}
+	nanoFractions := int64(monthsNanos & 0x000003FF)
+
+	// Signed integer division and remainder in Go truncate toward zero,
+	// so direct `micros / N` / `micros % N` already give H/M/S/Nanos
+	// the same sign as the source — the sign-group consistency rule
+	// holds for free without an absMicros + timeSign indirection. The
+	// nano_fractions field is always non-negative (0..999) and adds in
+	// the same direction the micros remainder pushes; the negative
+	// total case (micros=-1, nano_fractions=999 → -1 nano) falls out
+	// naturally because microsRem*1000 is already negative when micros
+	// is negative.
+	bv := &bigquery.IntervalValue{
+		Days:   days,
+		Years:  int32(months / 12),
+		Months: int32(months % 12),
+		Hours:  int32(micros / 3_600_000_000),
+	}
+	microsRem := micros % 3_600_000_000
+	bv.Minutes = int32(microsRem / 60_000_000)
+	microsRem %= 60_000_000
+	bv.Seconds = int32(microsRem / 1_000_000)
+	microsRem %= 1_000_000
+	bv.SubSecondNanos = int32(microsRem*1000 + nanoFractions)
+
+	return &IntervalValue{IntervalValue: bv}, nil
 }
 
 // TODO(zetasql-wasm-migration): array/struct value decoders are part of the
