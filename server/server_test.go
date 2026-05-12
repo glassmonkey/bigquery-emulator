@@ -2780,3 +2780,77 @@ func TestInformationSchema(t *testing.T) {
 	})
 
 }
+
+// TestDashedProjectIdentifier_Issue57 pins the contract introduced by
+// zetasql-wasm v0.13.0: a project identifier that contains a dash is
+// accepted in an unquoted table path. Before v0.13.0 the parser rejected
+//
+//	SELECT COUNT(*) FROM my-dashed-project.ds.t
+//
+// with `Syntax error: Table name contains '-' character`. BigQuery
+// production accepts the same form per the Dashed identifiers
+// extension, so the emulator should too — this test fails if the
+// FEATURE_V_1_3_ALLOW_DASHES_IN_TABLE_NAME default drops out of
+// enableBigQueryExtensions in a future zetasql-wasm bump.
+func TestDashedProjectIdentifier_Issue57(t *testing.T) {
+	ctx := context.Background()
+
+	const projectID = "my-dashed-project"
+
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := types.NewProject(
+		projectID,
+		types.NewDataset(
+			"ds",
+			types.NewTable(
+				"t",
+				[]*types.Column{
+					types.NewColumn("id", types.STRING),
+				},
+				types.Data{
+					{"id": "row1"},
+					{"id": "row2"},
+					{"id": "row3"},
+				},
+			),
+		),
+	)
+	if err := bqServer.Load(server.StructSource(project)); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	client, err := bigquery.NewClient(
+		ctx,
+		projectID,
+		option.WithEndpoint(testServer.URL),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	query := client.Query("SELECT COUNT(*) FROM my-dashed-project.ds.t")
+	it, err := query.Read(ctx)
+	if err != nil {
+		t.Fatalf("query failed (unquoted dashed identifier should be accepted): %v", err)
+	}
+	var row []bigquery.Value
+	if err := it.Next(&row); err != nil {
+		t.Fatal(err)
+	}
+	if len(row) != 1 {
+		t.Fatalf("expected 1 column, got %d", len(row))
+	}
+	if got, want := row[0], int64(3); got != want {
+		t.Fatalf("COUNT(*) = %v, want %v", got, want)
+	}
+}
