@@ -5545,7 +5545,6 @@ FROM CoordinatesTable AS t`,
 		},
 		{
 			name:         "json_string",
-			skipReason: "emulator: function signature mismatch on v0.9.0 (per-case triage post-v0.9.0 follow-up)",
 			query:        `SELECT STRING(JSON '"purple"') AS color`,
 			expectedRows: [][]interface{}{{"purple"}},
 		},
@@ -5561,13 +5560,11 @@ FROM CoordinatesTable AS t`,
 		},
 		{
 			name:         "json_float64",
-			skipReason: "emulator: BigQuery FLOAT64(json) has no SQLite-level bind in function_register.go (analyzer accepts via v0.10.0 BigQuery extensions, but exec fails 'no such function: FLOAT64'; post-v0.10.0 follow-up: add bindFloat64)",
 			query:        `SELECT FLOAT64(JSON '9.8') AS velocity`,
 			expectedRows: [][]interface{}{{float64(9.8)}},
 		},
 		{
 			name: "json_type",
-			skipReason: "emulator: JSON literal lifted to StringValue at bind time (encoder/decoder still treats JSON kind as STRING); JSON_TYPE bind expects JsonValue and rejects with 'failed to convert zetasqlite.StringValue to JSON value' (post-v0.10.0 follow-up)",
 			query: `
 SELECT json_val, JSON_TYPE(json_val) AS type
 FROM

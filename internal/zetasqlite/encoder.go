@@ -178,6 +178,9 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 	if ts, ok := v.AsTimestamp(); ok {
 		return TimestampValue(ts), nil
 	}
+	if j, ok := v.AsJson(); ok {
+		return JsonValue(j), nil
+	}
 	if name, ok := v.AsEnumName(); ok {
 		return StringValue(name), nil
 	}
