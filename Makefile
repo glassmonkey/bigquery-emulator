@@ -28,17 +28,19 @@ docker/build:
 	docker build -t bigquery-emulator:${VERSION} \
 		--build-arg REVISION=${REVISION} .
 
-# Merge per-caseset fixture/<caseset>/{schema.yml,data.yml} into a
+# Merge per-caseset fixture/<caseset>/{schema.yml, data/} into a
 # single fixture/combined.yml that compose mounts into the emulator.
-# Schema (columns) and data (rows) are kept in separate files so
-# each is easy to read and review on its own. mergefixture re-joins
-# them by project/dataset/table id. Currently a single caseset
+# Schema (columns) lives in schema.yml; rows live under data/, one
+# file per (project, dataset) named <project>.<dataset>.yml — the
+# project and dataset are recovered from the filename so each
+# data file is a flat `table_id → rows` map without restating the
+# parent path. mergefixture re-joins schema + data by project /
+# dataset / table id. Currently a single caseset
 # (dashed_identifier); add another caseset by dropping a new
 # fixture/<name>/ pair and extending this target's input list.
 e2e/fixture:
 	go run ./e2e/cmd/mergefixture \
-		e2e/testdata/fixture/dashed_identifier/schema.yml \
-		e2e/testdata/fixture/dashed_identifier/data.yml \
+		e2e/testdata/fixture/dashed_identifier \
 		e2e/testdata/fixture/combined.yml
 
 # Bring the emulator up via the e2e compose definition. Always

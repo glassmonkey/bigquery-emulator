@@ -1,0 +1,16 @@
+# Initial rows for project=my-dashed-project, dataset=ds.
+# project and dataset are taken from the filename (split on the
+# last '.'); the YAML body is a flat map of table id → rows.
+# Schema lives in ../schema.yml.
+t:
+  - {id: 1, val: a}
+  - {id: 2, val: b}
+  - {id: 3, val: c}
+src:
+  - {id: 2, val: B}
+  - {id: 3, val: C}
+t_update:
+  - {id: 1, val: original}
+t_delete:
+  - {id: 1, val: a}
+  - {id: 2, val: b}

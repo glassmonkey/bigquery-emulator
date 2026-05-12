@@ -1,21 +1,39 @@
-// mergefixture combines a per-caseset schema.yml (columns-only) and
-// data.yml (rows-only) into a single emulator-compatible fixture
-// YAML that bigquery-emulator can load via --data-from-yaml.
+// mergefixture combines a per-caseset fixture directory into a
+// single emulator-compatible YAML that bigquery-emulator loads via
+// --data-from-yaml.
 //
 // Usage:
 //
-//	go run ./e2e/cmd/mergefixture <schema.yml> <data.yml> <out.yml>
+//	go run ./e2e/cmd/mergefixture <fixture-dir> <out.yml>
 //
-// The caseset's project / dataset / table identifiers must match
-// between schema.yml and data.yml. Rows whose table is absent from
-// the schema are silently dropped (schema is the source of truth
-// for structure); columns whose table is absent from the data are
-// kept with an empty data slice (table is created empty).
+// Fixture directory layout:
+//
+//	<fixture-dir>/
+//	├── schema.yml                       columns per table, in the
+//	│                                    emulator-native projects ▶
+//	│                                    datasets ▶ tables ▶ columns
+//	│                                    shape.
+//	└── data/
+//	    └── <project>.<dataset>.yml      flat map: table id → rows.
+//	                                     `<project>` and `<dataset>`
+//	                                     are recovered from the file
+//	                                     name by splitting on the
+//	                                     last '.' (BigQuery's project
+//	                                     ID and dataset ID rules
+//	                                     forbid '.' so this is
+//	                                     unambiguous).
+//
+// Schema is the source of truth for structure; rows whose table is
+// absent from the schema are dropped. Tables present in the schema
+// but absent from data/ are emitted with no `data:` field (created
+// empty).
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 )
@@ -40,30 +58,66 @@ type root struct {
 	Projects []project `yaml:"projects"`
 }
 
+// dataIndex is project → dataset → table → rows.
+type dataIndex map[string]map[string]map[string][]map[string]interface{}
+
 func main() {
-	if len(os.Args) != 4 {
-		fmt.Fprintln(os.Stderr, "usage: mergefixture <schema.yml> <data.yml> <out.yml>")
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: mergefixture <fixture-dir> <out.yml>")
 		os.Exit(2)
 	}
-	schemaPath, dataPath, outPath := os.Args[1], os.Args[2], os.Args[3]
+	dir, outPath := os.Args[1], os.Args[2]
 
-	schema, err := readRoot(schemaPath)
+	schema, err := readRoot(filepath.Join(dir, "schema.yml"))
 	if err != nil {
 		die("read schema:", err)
 	}
-	data, err := readRoot(dataPath)
+	idx, err := readDataDir(filepath.Join(dir, "data"))
 	if err != nil {
-		die("read data:", err)
+		die("read data dir:", err)
 	}
 
-	if err := writeRoot(outPath, mergeRoot(schema, data)); err != nil {
+	if err := writeRoot(outPath, mergeRoot(schema, idx)); err != nil {
 		die("write out:", err)
 	}
 }
 
-func mergeRoot(schema, data root) root {
-	idx := buildDataIndex(data)
-	merged := root{}
+// readDataDir globs <dir>/*.yml. Each file's basename (sans .yml)
+// is split on the last '.' to recover "<project>.<dataset>"; the
+// file contents are a flat map: table id → rows.
+func readDataDir(dir string) (dataIndex, error) {
+	idx := dataIndex{}
+	files, err := filepath.Glob(filepath.Join(dir, "*.yml"))
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		base := strings.TrimSuffix(filepath.Base(f), ".yml")
+		dot := strings.LastIndex(base, ".")
+		if dot <= 0 || dot == len(base)-1 {
+			return nil, fmt.Errorf("%s: filename must be <project>.<dataset>.yml", f)
+		}
+		proj := base[:dot]
+		ds := base[dot+1:]
+
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		var tables map[string][]map[string]interface{}
+		if err := yaml.Unmarshal(b, &tables); err != nil {
+			return nil, fmt.Errorf("unmarshal %s: %w", f, err)
+		}
+		if idx[proj] == nil {
+			idx[proj] = map[string]map[string][]map[string]interface{}{}
+		}
+		idx[proj][ds] = tables
+	}
+	return idx, nil
+}
+
+func mergeRoot(schema root, idx dataIndex) root {
+	out := root{}
 	for _, p := range schema.Projects {
 		mp := project{ID: p.ID}
 		for _, d := range p.Datasets {
@@ -77,27 +131,9 @@ func mergeRoot(schema, data root) root {
 			}
 			mp.Datasets = append(mp.Datasets, md)
 		}
-		merged.Projects = append(merged.Projects, mp)
+		out.Projects = append(out.Projects, mp)
 	}
-	return merged
-}
-
-func buildDataIndex(r root) map[string]map[string]map[string][]map[string]interface{} {
-	idx := map[string]map[string]map[string][]map[string]interface{}{}
-	for _, p := range r.Projects {
-		if idx[p.ID] == nil {
-			idx[p.ID] = map[string]map[string][]map[string]interface{}{}
-		}
-		for _, d := range p.Datasets {
-			if idx[p.ID][d.ID] == nil {
-				idx[p.ID][d.ID] = map[string][]map[string]interface{}{}
-			}
-			for _, tbl := range d.Tables {
-				idx[p.ID][d.ID][tbl.ID] = tbl.Data
-			}
-		}
-	}
-	return idx
+	return out
 }
 
 func readRoot(path string) (root, error) {
