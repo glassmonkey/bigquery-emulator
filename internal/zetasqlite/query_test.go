@@ -3014,6 +3014,16 @@ SELECT item FROM Produce WHERE Produce.category = 'vegetable' QUALIFY RANK() OVE
 			query:       `SELECT CAST("apple" AS INT64) AS not_a_number`,
 			expectedErr: `failed to analyze: INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:13]`,
 		},
+		// Pins the contract added by zetasql-wasm v0.13.0
+		// (FEATURE_V_1_3_ALLOW_DASHES_IN_TABLE_NAME on by default):
+		// the parser folds the dashed segment into a single
+		// table identifier rather than rejecting '-' as a syntax
+		// error. Downstream issue: bigquery-emulator#57.
+		{
+			name:         "dashed identifier in table name (issue #57)",
+			query:        `CREATE TEMP TABLE my-tbl AS SELECT 1 AS id; SELECT * FROM my-tbl;`,
+			expectedRows: [][]interface{}{{int64(1)}},
+		},
 		// Regression test for goccy/go-zetasqlite#175
 		{
 			name:        "cast integer to datetime",
