@@ -25,6 +25,7 @@ type option struct {
 	LogFormat    server.LogFormat `description:"specify the log format (console/json)" long:"log-format" default:"console"`
 	Database     string           `description:"specify the database file if required. if not specified, it will be on memory" long:"database"`
 	DataFromYAML string           `description:"specify the path to the YAML file that contains the initial data" long:"data-from-yaml"`
+	OTelEndpoint string           `description:"OTLP gRPC endpoint (host:port) to export traces to. empty disables tracing." long:"otel-endpoint" env:"BIGQUERY_EMULATOR_OTEL_ENDPOINT"`
 	Version      bool             `description:"print version" long:"version" short:"v"`
 }
 
@@ -115,6 +116,12 @@ func runServer(args []string, opt option) error {
 	}
 
 	ctx := context.Background()
+	if opt.OTelEndpoint != "" {
+		if err := bqServer.SetOTel(ctx, opt.OTelEndpoint); err != nil {
+			return fmt.Errorf("setup otel: %w", err)
+		}
+		fmt.Fprintf(os.Stdout, "[bigquery-emulator] OTLP traces -> %s\n", opt.OTelEndpoint)
+	}
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 

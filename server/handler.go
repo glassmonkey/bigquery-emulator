@@ -30,9 +30,12 @@ import (
 	"github.com/glassmonkey/bigquery-emulator/internal/connection"
 	"github.com/glassmonkey/bigquery-emulator/internal/logger"
 	"github.com/glassmonkey/bigquery-emulator/internal/metadata"
+	"github.com/glassmonkey/bigquery-emulator/internal/tracing"
 	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
 	"github.com/glassmonkey/bigquery-emulator/types"
 	"github.com/parquet-go/parquet-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func errorResponse(ctx context.Context, w http.ResponseWriter, e *ServerError) {
@@ -952,7 +955,10 @@ type jobsGetRequest struct {
 	job     *metadata.Job
 }
 
-func (h *jobsGetHandler) Handle(ctx context.Context, r *jobsGetRequest) (*bigqueryv2.Job, error) {
+func (h *jobsGetHandler) Handle(ctx context.Context, r *jobsGetRequest) (resp *bigqueryv2.Job, err error) {
+	ctx, end := tracing.Start(ctx, "server.jobs.get")
+	defer end(&err)
+	_ = ctx
 	content := *r.job.Content()
 	content.Status = &bigqueryv2.JobStatus{State: "DONE"}
 	return &content, nil
@@ -983,7 +989,13 @@ type jobsGetQueryResultsRequest struct {
 	useInt64Timestamp bool
 }
 
-func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQueryResultsRequest) (*internaltypes.GetQueryResultsResponse, error) {
+func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQueryResultsRequest) (resp *internaltypes.GetQueryResultsResponse, err error) {
+	ctx, end := tracing.Start(ctx, "server.jobs.getQueryResults")
+	defer end(&err)
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("bqemu.project", r.project.ID),
+		attribute.String("bqemu.job_id", r.job.ID),
+	)
 	response, err := r.job.Wait(ctx)
 	if err != nil {
 		return nil, err
@@ -1369,7 +1381,12 @@ func (h *jobsInsertHandler) exportToGCSWithObject(ctx context.Context, response 
 	return nil
 }
 
-func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*bigqueryv2.Job, error) {
+func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (resp *bigqueryv2.Job, err error) {
+	ctx, end := tracing.Start(ctx, "server.jobs.insert")
+	defer end(&err)
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("bqemu.project", r.project.ID),
+	)
 	job := r.job
 	if job.Configuration == nil {
 		return nil, fmt.Errorf("unspecified job configuration")
@@ -1665,9 +1682,15 @@ type jobsListRequest struct {
 	project *metadata.Project
 }
 
-func (h *jobsListHandler) Handle(ctx context.Context, r *jobsListRequest) (*bigqueryv2.JobList, error) {
+func (h *jobsListHandler) Handle(ctx context.Context, r *jobsListRequest) (resp *bigqueryv2.JobList, err error) {
+	ctx, end := tracing.Start(ctx, "server.jobs.list")
+	defer end(&err)
+	allJobs := r.project.Jobs()
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.Int("bqemu.job_count", len(allJobs)),
+	)
 	jobs := []*bigqueryv2.JobListJobs{}
-	for _, job := range r.project.Jobs() {
+	for _, job := range allJobs {
 		content := job.Content()
 		jobs = append(jobs, &bigqueryv2.JobListJobs{
 			Id:           content.Id,
@@ -1715,11 +1738,24 @@ type jobsQueryRequest struct {
 	useInt64Timestamp bool
 }
 
-func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*internaltypes.QueryResponse, error) {
+func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (resp *internaltypes.QueryResponse, err error) {
+	ctx, end := tracing.Start(ctx, "server.jobs.query")
+	defer end(&err)
+
 	var datasetID string
 	if r.queryRequest.DefaultDataset != nil {
 		datasetID = r.queryRequest.DefaultDataset.DatasetId
 	}
+	// Annotate the span with the inputs that explain query latency
+	// at a glance — project, dataset, dry-run flag, and the raw SQL.
+	// Avoid putting the full result set on the span; we only want
+	// the shape of the request here, not its content.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("bqemu.project", r.project.ID),
+		attribute.String("bqemu.dataset", datasetID),
+		attribute.Bool("bqemu.dry_run", r.queryRequest.DryRun),
+		attribute.String("bqemu.query", r.queryRequest.Query),
+	)
 	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, datasetID)
 	if err != nil {
 		return nil, err

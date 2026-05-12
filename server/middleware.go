@@ -6,21 +6,60 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/glassmonkey/bigquery-emulator/internal/logger"
+	"github.com/glassmonkey/bigquery-emulator/internal/tracing"
 )
 
 func sequentialAccessMiddleware() func(http.Handler) http.Handler {
 	var mu sync.Mutex
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The whole emulator is gated behind one mutex, so the
+			// time we spend waiting here is the single biggest knob
+			// behind "performance degrades as the number of queries
+			// grows": every other in-flight request stalls us. Pin
+			// it as an attribute on the current span (otelhttp puts
+			// the incoming-request span in ctx) so it shows up next
+			// to handler timings in the trace.
+			t0 := time.Now()
 			mu.Lock()
+			wait := time.Since(t0)
+			span := trace.SpanFromContext(r.Context())
+			span.SetAttributes(attribute.Int64("bqemu.mutex.wait_ms", wait.Milliseconds()))
 			defer mu.Unlock()
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// tracingMiddleware wraps the request in an otelhttp incoming
+// span and stashes the server's tracer in ctx so handler code
+// can pull it via tracing.FromContext and open child spans
+// without depending on a global TracerProvider.
+//
+// otelhttp creates the parent (incoming) span using the server's
+// TracerProvider explicitly so a no-op default doesn't get
+// silently overridden by anything the embedder may have set on
+// the otel package-level global.
+func tracingMiddleware(s *Server) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		injected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := tracing.WithTracer(r.Context(), s.tracer)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+		return otelhttp.NewHandler(
+			injected,
+			"bigquery-emulator",
+			otelhttp.WithTracerProvider(s.tracerProvider),
+		)
 	}
 }
 
@@ -167,7 +206,12 @@ func withProjectMiddleware() func(http.Handler) http.Handler {
 			projectID, exists := projectIDFromParams(params)
 			if exists {
 				server := serverFromContext(ctx)
-				project, err := server.metaRepo.FindProject(ctx, projectID)
+				lookupCtx, end := tracing.Start(ctx, "middleware.findProject")
+				trace.SpanFromContext(lookupCtx).SetAttributes(
+					attribute.String("bqemu.project", projectID),
+				)
+				project, err := server.metaRepo.FindProject(lookupCtx, projectID)
+				end(&err)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
 					fmt.Fprintln(w, err)
@@ -218,9 +262,23 @@ func withJobMiddleware() func(http.Handler) http.Handler {
 			jobID, exists := jobIDFromParams(params)
 			if exists {
 				project := projectFromContext(ctx)
+				// project.Job is the leading suspect for "performance
+				// degrades with the number of queries": every poll on
+				// /jobs/<id> and /queries/<id> hits this lookup, so if
+				// it walks the project's job slice linearly the cost
+				// grows with the number of completed jobs.
+				lookupCtx, end := tracing.Start(ctx, "middleware.findJob")
+				trace.SpanFromContext(lookupCtx).SetAttributes(
+					attribute.String("bqemu.job_id", jobID),
+				)
 				job := project.Job(jobID)
+				var notFound error
 				if job == nil {
-					errorResponse(ctx, w, errNotFound(fmt.Sprintf("job %s is not found", jobID)))
+					notFound = fmt.Errorf("job %s is not found", jobID)
+				}
+				end(&notFound)
+				if job == nil {
+					errorResponse(ctx, w, errNotFound(notFound.Error()))
 					return
 				}
 				ctx = withJob(ctx, job)

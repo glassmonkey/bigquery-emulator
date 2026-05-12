@@ -1,0 +1,28 @@
+# Minimal OpenTelemetry Collector config used by bigquery-emulator's
+# observability profile. Accepts OTLP gRPC on :4317, batches briefly,
+# and appends each span as one JSON line to /var/log/otel/traces.jsonl
+# (mounted from e2e/otel-output on the host).
+#
+# The output path lives under a writable bind mount because the
+# contrib collector image's default filesystem is read-only.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 100ms
+
+exporters:
+  file:
+    path: /var/log/otel/traces.jsonl
+    flush_interval: 1s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]
