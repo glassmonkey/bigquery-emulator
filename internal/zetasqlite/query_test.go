@@ -3000,10 +3000,15 @@ SELECT item FROM Produce WHERE Produce.category = 'vegetable' QUALIFY RANK() OVE
 			},
 		},
 		{
+			// Cast of an unparseable string literal is rejected at
+			// analyze time once newAnalyzerOptions enables
+			// RejectInvalidLiteralCasts. The error wording comes from
+			// zetasql-wasm's *types.CastValueError (no source location
+			// because the resolver does not retain it for the
+			// post-analyze walk).
 			name:        "invalid cast",
-			skipReason: "emulator: error text differs from expected on v0.9.0 (test-side update needed, post-v0.9.0 follow-up)",
 			query:       `SELECT CAST("apple" AS INT64) AS not_a_number`,
-			expectedErr: `failed to analyze: INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:13]`,
+			expectedErr: `failed to analyze: Could not cast value "apple" to type INT64`,
 		},
 		// Pins the contract added by zetasql-wasm v0.13.0
 		// (FEATURE_V_1_3_ALLOW_DASHES_IN_TABLE_NAME on by default):

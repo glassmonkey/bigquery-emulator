@@ -120,6 +120,15 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 	langOpt.EnableReservableKeyword("QUALIFY", true)
 	opt := zetasql.NewAnalyzerOptions()
 	opt.AllowUndeclaredParameters = true
+	// BigQuery rejects CAST of an unparseable string literal at analyze
+	// time (e.g. CAST("apple" AS INT64)). Without this opt-in the
+	// analyzer leaves the cast unfolded and the failure surfaces at
+	// runtime via Go's strconv parser, which produces a less precise
+	// "strconv.ParseInt: ..." message instead of a BigQuery-shaped
+	// analyzer error. zetasql-wasm gates this behind a Go-side flag so
+	// upstream ZetaSQL default behavior stays preserved for other
+	// callers.
+	opt.RejectInvalidLiteralCasts = true
 	opt.Language = langOpt
 	pl := zetasql.ParseLocationRecordFullNodeScope
 	opt.ParseLocationRecordType = &pl
