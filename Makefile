@@ -11,13 +11,12 @@ REVISION := $(shell git rev-parse --short HEAD)
 	e2e/fixture \
 	e2e
 
-# The WASM-based analyzer (zetasql-wasm) replaced the previous
-# CGO-based go-zetasql, so the build no longer needs the C++
-# static-link toolchain. The SQLite driver (mattn/go-sqlite3) is
-# still CGO-bound, so plain `go build` with the host toolchain is
-# what runs here.
+# Pure-Go build: both the analyzer (zetasql-wasm) and the SQLite
+# driver (ncruces/go-sqlite3) run on wazero, so no C toolchain is
+# required. CGO_ENABLED=0 is explicit so `go install` and cross-
+# compile both work without gcc on the host.
 emulator/build:
-	go build -o bigquery-emulator \
+	CGO_ENABLED=0 go build -o bigquery-emulator \
 		-ldflags='-s -w -X main.revision=${REVISION}' \
 		./cmd/bigquery-emulator
 

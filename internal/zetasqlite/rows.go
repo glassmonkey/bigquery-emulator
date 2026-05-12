@@ -72,12 +72,12 @@ func (r *Rows) Next(dest []driver.Value) error {
 	}
 	if !r.rows.Next() {
 		if err := r.rows.Err(); err != nil {
-			return err
+			return unwrapSQLiteErr(err)
 		}
 		return io.EOF
 	}
 	if err := r.rows.Err(); err != nil {
-		return err
+		return unwrapSQLiteErr(err)
 	}
 	colTypes := r.columnTypes()
 	values := make([]interface{}, 0, len(dest))

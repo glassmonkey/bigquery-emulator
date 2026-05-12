@@ -8,7 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mattn/go-sqlite3"
+	sqlite3 "github.com/ncruces/go-sqlite3"
+	ncrucesdriver "github.com/ncruces/go-sqlite3/driver"
 )
 
 var (
@@ -25,14 +26,34 @@ var (
 
 func init() {
 	sql.Register("zetasqlite", &ZetaSQLiteDriver{})
-	sql.Register("zetasqlite_sqlite3", &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			if err := RegisterFunctions(conn); err != nil {
-				return err
-			}
-			conn.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, -1)
-			return nil
-		},
+}
+
+// openSQLiteDB opens the underlying SQLite database via ncruces and
+// installs the fork's UDFs / collation / variable-count limit on the
+// connection. ncruces's database/sql shim exposes a per-connection
+// init callback via driver.Open, so we use that instead of
+// sql.Register-ing a separate driver name.
+//
+// DBCONFIG_DQS_DML/DQS_DDL are re-enabled here because the fork emits
+// some string literals as double-quoted ("...") rather than
+// single-quoted ('...'). mattn/go-sqlite3 ships with legacy DQS
+// behavior on; modern SQLite (and ncruces) defaults it off, which
+// makes those literals get parsed as identifiers and triggers
+// "no such column" errors. Toggling DQS on restores mattn parity
+// without rewriting every emitted literal in the fork.
+func openSQLiteDB(name string) (*sql.DB, error) {
+	return ncrucesdriver.Open(name, func(conn *sqlite3.Conn) error {
+		if _, err := conn.Config(sqlite3.DBCONFIG_DQS_DML, true); err != nil {
+			return fmt.Errorf("failed to enable DQS_DML: %w", err)
+		}
+		if _, err := conn.Config(sqlite3.DBCONFIG_DQS_DDL, true); err != nil {
+			return fmt.Errorf("failed to enable DQS_DDL: %w", err)
+		}
+		if err := RegisterFunctions(conn); err != nil {
+			return err
+		}
+		conn.Limit(sqlite3.LIMIT_VARIABLE_NUMBER, -1)
+		return nil
 	})
 }
 
@@ -64,7 +85,7 @@ func isPrivateInMemory(name string) bool {
 
 func newDBAndCatalog(name string) (*sql.DB, *Catalog, error) {
 	if isPrivateInMemory(name) {
-		db, err := sql.Open("zetasqlite_sqlite3", name)
+		db, err := openSQLiteDB(name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to open database by %s: %w", name, err)
 		}
@@ -76,7 +97,7 @@ func newDBAndCatalog(name string) (*sql.DB, *Catalog, error) {
 	if exists {
 		return db, nameToCatalogMap[name], nil
 	}
-	db, err := sql.Open("zetasqlite_sqlite3", name)
+	db, err := openSQLiteDB(name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open database by %s: %w", name, err)
 	}
