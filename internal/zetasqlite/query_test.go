@@ -4985,7 +4985,6 @@ FROM Input`,
 		// interval functions
 		{
 			name:         "interval operator",
-			skipReason: "emulator: INTERVAL value passed as bytes payload at exec time (encoder-side lift not yet wired for INTERVAL bytes, post-v0.9.0 follow-up)",
 			query:        `SELECT DATE "2020-09-22" + val FROM UNNEST([INTERVAL 1 DAY,INTERVAL -1 DAY,INTERVAL 2 YEAR,CAST('1-2 3 18:1:55' AS INTERVAL)]) as val`,
 			expectedRows: [][]interface{}{{"2020-09-23T00:00:00"}, {"2020-09-21T00:00:00"}, {"2022-09-22T00:00:00"}, {"2021-11-25T18:01:55"}},
 		},
@@ -5007,7 +5006,6 @@ SELECT
 		},
 		{
 			name: "extract from interval",
-			skipReason: "emulator: INTERVAL value passed as bytes payload at exec time (encoder-side lift not yet wired for INTERVAL bytes, post-v0.9.0 follow-up)",
 			query: `SELECT
   EXTRACT(YEAR FROM i), EXTRACT(MONTH FROM i), EXTRACT(DAY FROM i),
   EXTRACT(HOUR FROM i),  EXTRACT(MINUTE FROM i),  EXTRACT(SECOND FROM i),  EXTRACT(MILLISECOND FROM i),  EXTRACT(MICROSECOND FROM i)
@@ -5029,7 +5027,6 @@ SELECT
 		},
 		{
 			name:         "justify_interval",
-			skipReason: "emulator: INTERVAL value passed as bytes payload at exec time (encoder-side lift not yet wired for INTERVAL bytes, post-v0.9.0 follow-up)",
 			query:        `SELECT JUSTIFY_INTERVAL(INTERVAL '29 49:00:00' DAY TO SECOND)`,
 			expectedRows: [][]interface{}{{"0-1 1 1:0:0"}},
 		},
