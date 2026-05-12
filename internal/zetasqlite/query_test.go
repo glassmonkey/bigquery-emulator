@@ -3002,7 +3002,7 @@ SELECT item FROM Produce WHERE Produce.category = 'vegetable' QUALIFY RANK() OVE
 		{
 			name:        "invalid cast",
 			query:       `SELECT CAST("apple" AS INT64) AS not_a_number`,
-			expectedErr: `failed to analyze: Could not cast value "apple" to type INT64`,
+			expectedErr: `failed to analyze: INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:13]`,
 		},
 		// Pins the contract added by zetasql-wasm v0.13.0
 		// (FEATURE_V_1_3_ALLOW_DASHES_IN_TABLE_NAME on by default):
