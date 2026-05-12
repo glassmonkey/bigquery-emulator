@@ -198,6 +198,12 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 			return intervalValueFromZetaSQLBytes(b)
 		}
 	}
+	if b, ok := v.AsNumeric(); ok {
+		return &NumericValue{Rat: ratFromZetaSQLNumericBytes(b, 9)}, nil
+	}
+	if b, ok := v.AsBigNumeric(); ok {
+		return &NumericValue{Rat: ratFromZetaSQLNumericBytes(b, 38), isBigNumeric: true}, nil
+	}
 	switch elts := v.Value.(type) {
 	case types.ArrayValue:
 		arr := &ArrayValue{}
@@ -331,6 +337,28 @@ func timestampValueFromLiteral(t time.Time) (TimestampValue, error) {
 var (
 	numericLiteralPattern = regexp.MustCompile(`NUMERIC "(.+)"`)
 )
+
+// ratFromZetaSQLNumericBytes decodes the proto-encoded NUMERIC / BIGNUMERIC
+// payload that zetasql-wasm hands back from LiteralValue.AsNumeric() /
+// AsBigNumeric(): a little-endian two's-complement signed integer that is
+// the value scaled by 10^scaleDigits (9 for NUMERIC, 38 for BIGNUMERIC).
+// An empty slice represents zero.
+func ratFromZetaSQLNumericBytes(b []byte, scaleDigits int) *big.Rat {
+	if len(b) == 0 {
+		return new(big.Rat)
+	}
+	be := make([]byte, len(b))
+	for i, x := range b {
+		be[len(b)-1-i] = x
+	}
+	z := new(big.Int).SetBytes(be)
+	if be[0]&0x80 != 0 {
+		twoPow := new(big.Int).Lsh(big.NewInt(1), uint(8*len(b)))
+		z.Sub(z, twoPow)
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits)), nil)
+	return new(big.Rat).SetFrac(z, scale)
+}
 
 func numericValueFromLiteral(lit string) (*NumericValue, error) {
 	matches := numericLiteralPattern.FindAllStringSubmatch(lit, -1)
