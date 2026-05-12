@@ -21,15 +21,10 @@ on:
 jobs:
   build:
     name: Build
-    # Keep both runners. The fork is not fully CGO-free yet
-    # (mattn/go-sqlite3 is CGO-bound), so libc / system-sqlite
-    # differences between Linux and macOS can surface real
-    # portability bugs at link/runtime. macOS-only failures are
-    # caught here rather than after a release.
-    strategy:
-      matrix:
-        os: ["ubuntu-latest", "macos-latest"]
-    runs-on: ${{ matrix.os }}
+    # Pure-Go build (CGO_ENABLED=0); cross-OS portability is no
+    # longer a concern since there is no platform-specific link/run
+    # path. ubuntu-latest alone is sufficient.
+    runs-on: ubuntu-latest
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -48,10 +43,7 @@ jobs:
         run: ./bigquery-emulator --version
   test:
     name: Test
-    strategy:
-      matrix:
-        os: ["ubuntu-latest", "macos-latest"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -69,9 +61,7 @@ jobs:
     name: E2E
     # Container-backed; ubuntu-latest only. Docker on macOS GitHub
     # runners is not first-class (no Docker Desktop license-free
-    # setup), so the e2e build/test cycle stays on Linux. The
-    # cross-OS portability concern is already covered by the Build
-    # matrix above.
+    # setup), so the e2e build/test cycle stays on Linux.
     runs-on: ubuntu-latest
     steps:
       - name: checkout
