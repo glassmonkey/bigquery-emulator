@@ -84,6 +84,17 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
+      # Generate the merged fixture compose mounts at
+      # /fixture/combined.yml. The file is git-ignored because it is
+      # the derived join of testdata/fixture/<caseset>/{schema,data}.yml
+      # produced by e2e/cmd/mergefixture; without this step the
+      # emulator container crashes on startup with
+      # "open /fixture/combined.yml: no such file or directory" (see
+      # commit f2e94f6 where the static seed.yml was replaced with the
+      # generated form and this workflow was not updated to match).
+      - name: generate e2e fixture
+        run: make e2e/fixture
+
       - name: bring up emulator
         run: docker compose -f e2e/compose.yml up -d --no-build
 
