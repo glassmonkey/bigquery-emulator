@@ -199,10 +199,10 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 		}
 	}
 	if b, ok := v.AsNumeric(); ok {
-		return &NumericValue{Rat: ratFromZetaSQLNumericBytes(b, 9)}, nil
+		return numericValueFromZetaSQLBytes(b), nil
 	}
 	if b, ok := v.AsBigNumeric(); ok {
-		return &NumericValue{Rat: ratFromZetaSQLNumericBytes(b, 38), isBigNumeric: true}, nil
+		return bigNumericValueFromZetaSQLBytes(b), nil
 	}
 	switch elts := v.Value.(type) {
 	case types.ArrayValue:
@@ -338,12 +338,24 @@ var (
 	numericLiteralPattern = regexp.MustCompile(`NUMERIC "(.+)"`)
 )
 
-// ratFromZetaSQLNumericBytes decodes the proto-encoded NUMERIC / BIGNUMERIC
-// payload that zetasql-wasm hands back from LiteralValue.AsNumeric() /
-// AsBigNumeric(): a little-endian two's-complement signed integer that is
-// the value scaled by 10^scaleDigits (9 for NUMERIC, 38 for BIGNUMERIC).
-// An empty slice represents zero.
-func ratFromZetaSQLNumericBytes(b []byte, scaleDigits int) *big.Rat {
+// numericValueFromZetaSQLBytes decodes the proto-encoded NUMERIC payload
+// that LiteralValue.AsNumeric returns: a little-endian two's-complement
+// signed integer equal to the value scaled by 10^9. Empty slice = zero.
+func numericValueFromZetaSQLBytes(b []byte) *NumericValue {
+	return &NumericValue{Rat: ratFromScaledLEBytes(b, 9)}
+}
+
+// bigNumericValueFromZetaSQLBytes mirrors numericValueFromZetaSQLBytes for
+// BIGNUMERIC literals; the wire encoding is identical, the scale is 10^38.
+func bigNumericValueFromZetaSQLBytes(b []byte) *NumericValue {
+	return &NumericValue{Rat: ratFromScaledLEBytes(b, 38), isBigNumeric: true}
+}
+
+// ratFromScaledLEBytes decodes a little-endian two's-complement signed
+// integer into a *big.Rat divided by 10^scaleDigits. Empty slice = zero.
+// It is the shared primitive behind the NUMERIC / BIGNUMERIC literal
+// lifts; the scale belongs to those callers, not here.
+func ratFromScaledLEBytes(b []byte, scaleDigits int) *big.Rat {
 	if len(b) == 0 {
 		return new(big.Rat)
 	}
