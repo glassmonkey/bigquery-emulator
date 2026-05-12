@@ -2,22 +2,45 @@ package zetasqlite
 
 import (
 	"context"
+	"sync"
 	"testing"
+
+	"github.com/glassmonkey/zetasql-wasm"
 )
 
-// TestRejectInvalidLiteralCast pins the gate's contract: which shapes
-// trigger an analyzer-side rejection and which shapes pass through
-// to runtime. Each case states the intent in its name so a reader can
-// read the table as the gate's spec.
-func TestRejectInvalidLiteralCast(t *testing.T) {
-	ctx := context.Background()
-	cat := NewCatalog(nil)
-	a, err := NewAnalyzer(ctx, cat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = a.Close(ctx) })
+// sharedEngine is the WASM-backed analyzer engine. Spinning up zetasql
+// in WASM costs ~5 seconds, so we lazily build one engine for the
+// whole test binary; per-case fixtures (AnalyzerOptions, Catalog) are
+// still rebuilt for every subtest so no test-visible mutable state is
+// shared between cases.
+var (
+	sharedEngine     *zetasql.Engine
+	sharedEngineOnce sync.Once
+	sharedEngineErr  error
+)
 
+func getSharedEngine(t *testing.T) *zetasql.Engine {
+	t.Helper()
+	sharedEngineOnce.Do(func() {
+		sharedEngine, sharedEngineErr = zetasql.New(context.Background())
+	})
+	if sharedEngineErr != nil {
+		t.Fatalf("init zetasql engine: %v", sharedEngineErr)
+	}
+	return sharedEngine
+}
+
+// TestRejectInvalidLiteralCast pins the gate's contract: which shapes
+// trigger an analyzer-side rejection and which shapes pass through to
+// runtime. The end-to-end TestQuery cases only exercise three points;
+// this table is the rest of the contract.
+//
+// The gate is exercised directly rather than through Analyzer.Analyze
+// (the production wire-up) because we want to pin the helper's pure
+// contract — input AST + SQL → error — independently of catalog sync,
+// parseScript, and statement-loop concerns. The production wire-up is
+// covered by TestQuery/invalid_cast and friends.
+func TestRejectInvalidLiteralCast(t *testing.T) {
 	cases := []struct {
 		name    string
 		sql     string
@@ -49,8 +72,23 @@ func TestRejectInvalidLiteralCast(t *testing.T) {
 			sql:     "SELECT\n  CAST(\"apple\" AS INT64)",
 			wantErr: `INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 2:8]`,
 		},
+		{
+			name:    "first invalid cast wins when multiple bad casts appear",
+			sql:     `SELECT CAST("apple" AS INT64), CAST("banana" AS INT64)`,
+			wantErr: `INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:13]`,
+		},
+		{
+			name:    "valid cast preceding invalid cast does not mask the invalid one",
+			sql:     `SELECT CAST("42" AS INT64), CAST("apple" AS INT64)`,
+			wantErr: `INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:34]`,
+		},
+		{
+			name:    "invalid cast inside a sub-expression is still gated",
+			sql:     `SELECT 1 + CAST("apple" AS INT64)`,
+			wantErr: `INVALID_ARGUMENT: Could not cast literal "apple" to type INT64 [at 1:17]`,
+		},
 
-		// --- accept cases (same gate ran, parse succeeded, no rejection) ---
+		// --- accept cases (gate ran, parse succeeded, no rejection) ---
 		{
 			name: "valid integer string is accepted",
 			sql:  `SELECT CAST("42" AS INT64)`,
@@ -87,13 +125,24 @@ func TestRejectInvalidLiteralCast(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := a.engine.Analyze(ctx, tc.sql, cat.SimpleCatalog(), a.opt)
+			// Arrange
+			ctx := t.Context()
+			engine := getSharedEngine(t)
+			opt, err := newAnalyzerOptions()
 			if err != nil {
-				t.Fatalf("engine.Analyze failed: %v", err)
+				t.Fatalf("newAnalyzerOptions: %v", err)
 			}
+			cat := NewCatalog(nil)
+			out, err := engine.Analyze(ctx, tc.sql, cat.SimpleCatalog(), opt)
+			if err != nil {
+				t.Fatalf("engine.Analyze: %v", err)
+			}
+
+			// Act
 			got := rejectInvalidLiteralCast(out.Resolved, tc.sql)
+
+			// Assert
 			if tc.wantErr == "" {
 				if got != nil {
 					t.Errorf("expected no rejection, got %q", got.Error())
@@ -172,9 +221,11 @@ func TestByteOffsetToLineColumn(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			// Act
 			gotLine, gotCol := byteOffsetToLineColumn(tc.sql, tc.offset)
+
+			// Assert
 			if gotLine != tc.wantLine || gotCol != tc.wantCol {
 				t.Errorf("byteOffsetToLineColumn(%q, %d) = (%d, %d), want (%d, %d)",
 					tc.sql, tc.offset, gotLine, gotCol, tc.wantLine, tc.wantCol)
