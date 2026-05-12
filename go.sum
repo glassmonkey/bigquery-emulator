@@ -77,6 +77,8 @@ github.com/fsouza/fake-gcs-server v1.43.0 h1:8ScK+6/mpKp9QoICALyemgVySEoolMbO2TJ
 github.com/fsouza/fake-gcs-server v1.43.0/go.mod h1:zYK0CjlFRY9gpWhukEGWzvGHMQ/g8HoGf/RzpKSqpbs=
 github.com/glassmonkey/zetasql-wasm v0.12.1 h1:teN+7xmVRJEVILAEhfUG3k2k3plxKV6VLiQ3EtMVoZ0=
 github.com/glassmonkey/zetasql-wasm v0.12.1/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
+github.com/glassmonkey/zetasql-wasm v0.13.0 h1:pRBn768dKyKu3hEn/Byu/cgprySIK//5wqW6r7mk4f0=
+github.com/glassmonkey/zetasql-wasm v0.13.0/go.mod h1:H4Fx6Zu9aeOe19YzeA3x4PeivBRcsbIlWG9ocDzIQcU=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.1 h1:pKouT5E8xu9zeFC39JXRDukb6JFQPXM5p5I91188VAQ=
 github.com/go-logr/logr v1.4.1/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
@@ -225,6 +227,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tetratelabs/wazero v1.8.2 h1:yIgLR/b2bN31bjxwXHD8a3d+BogigR952csSDdLYEv4=
 github.com/tetratelabs/wazero v1.8.2/go.mod h1:yAI0XTsMBhREkM/YDAK/zNou3GoiAce1P6+rp/wQhjs=
+github.com/tetratelabs/wazero v1.10.1 h1:2DugeJf6VVk58KTPszlNfeeN8AhhpwcZqkJj2wwFuH8=
+github.com/tetratelabs/wazero v1.10.1/go.mod h1:DRm5twOQ5Gr1AoEdSi0CLjDQF1J9ZAuyqFIjl1KKfQU=
 github.com/x-motemen/gobump v0.3.0 h1:gGlS/2R8Hao+eeZ+ATXjHhGwvxeDsVCP1vjGmEcl6js=
 github.com/x-motemen/gobump v0.3.0/go.mod h1:yaUMHKS2Vx2E7vnoZZ7suRGkfjcObW6jd71Beyb43Cg=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
