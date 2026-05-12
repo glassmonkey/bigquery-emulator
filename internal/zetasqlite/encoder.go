@@ -169,6 +169,12 @@ func ValueFromZetaSQLValue(v *types.LiteralValue) (Value, error) {
 	if days, ok := v.AsDateDays(); ok {
 		return dateValueFromLiteral(int64(days)), nil
 	}
+	if dt, ok := v.AsDatetime(); ok {
+		return DatetimeValue(dt), nil
+	}
+	if t, ok := v.AsTimeOfDay(); ok {
+		return TimeValue(t), nil
+	}
 	if ts, ok := v.AsTimestamp(); ok {
 		return TimestampValue(ts), nil
 	}

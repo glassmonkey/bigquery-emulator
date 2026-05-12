@@ -79,6 +79,10 @@ github.com/glassmonkey/zetasql-wasm v0.11.0 h1:BsJqLUNJjWSNbzQijYnDYoykJu2c+LphF
 github.com/glassmonkey/zetasql-wasm v0.11.0/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
 github.com/glassmonkey/zetasql-wasm v0.11.1 h1:9iL6RV+7HnVq8jplgLhioIjA4TQjOohzQu5myPHSlro=
 github.com/glassmonkey/zetasql-wasm v0.11.1/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
+github.com/glassmonkey/zetasql-wasm v0.11.2 h1:qE/ViTZD6Tm8BqCcFPjfxCLSxbJU6SWU8+Ao/4Bl6oA=
+github.com/glassmonkey/zetasql-wasm v0.11.2/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
+github.com/glassmonkey/zetasql-wasm v0.11.3 h1:OQKvzpK8PzZr6cGRhL+dgzjmKd4dNyDAWhHGoHNzY44=
+github.com/glassmonkey/zetasql-wasm v0.11.3/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.1 h1:pKouT5E8xu9zeFC39JXRDukb6JFQPXM5p5I91188VAQ=
 github.com/go-logr/logr v1.4.1/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
