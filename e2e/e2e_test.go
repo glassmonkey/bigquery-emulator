@@ -4,20 +4,28 @@
 // Assumes the emulator is reachable on http://localhost:9050 — bring
 // it up with `make docker/up` before running. Iterates every
 // testdata/query/*.sql, posts it to the BigQuery REST query
-// endpoint, renders the response as TSV, and diffs against the
-// paired .golden.tsv.
+// endpoint, and diffs the response against the paired golden file.
+//
+// Each query has exactly one of:
+//
+//	<name>.golden.tsv  — expect HTTP 200; render schema/rows as TSV
+//	                     (line 1 = column names, line 2..N = row
+//	                     values, both \t-joined) and byte-compare.
+//	<name>.golden.err  — expect HTTP non-200; substring-match the
+//	                     emulator's error.message against the file
+//	                     contents.
 //
 // testdata layout:
 //
 //	e2e/testdata/
-//	├── fixture/                   pre-condition state (empty for now;
-//	│                              future seed data / schema YAML can
-//	│                              live here and be wired into compose)
+//	├── fixture/                  pre-condition state loaded into
+//	│   └── seed.yml              the emulator via --data-from-yaml
+//	│                             (bind-mounted by compose.yml at
+//	│                             /fixture/seed.yml)
 //	└── query/
-//	    ├── <name>.sql             query to POST
-//	    └── <name>.golden.tsv      expected response, line 1 = column
-//	                               names (\t-joined), line 2..N = row
-//	                               values (\t-joined)
+//	    ├── <name>.sql            query to POST
+//	    ├── <name>.golden.tsv     OR
+//	    └── <name>.golden.err
 //
 // Run via the Makefile (the `make e2e` target wires the
 // docker/healthcheck gate so the test fails fast with a clear
@@ -55,10 +63,10 @@ const (
 	httpAddr    = "http://localhost:9050"
 )
 
-// TestSmoke posts every testdata/query/*.sql to the running
-// emulator and diffs the rendered TSV against the paired
-// .golden.tsv. The container's lifecycle is the user's
-// responsibility (see `make docker/up` / `make docker/down`).
+// TestSmoke posts every testdata/query/*.sql to the running emulator
+// and diffs the response against the paired golden file. The
+// container's lifecycle is the user's responsibility (see
+// `make docker/up` / `make docker/down`).
 func TestSmoke(t *testing.T) {
 	cases, err := filepath.Glob("testdata/query/*.sql")
 	if err != nil {
@@ -71,7 +79,8 @@ func TestSmoke(t *testing.T) {
 	for _, sqlPath := range cases {
 		sqlPath := sqlPath
 		name := strings.TrimSuffix(filepath.Base(sqlPath), ".sql")
-		goldenPath := strings.TrimSuffix(sqlPath, ".sql") + ".golden.tsv"
+		tsvPath := strings.TrimSuffix(sqlPath, ".sql") + ".golden.tsv"
+		errPath := strings.TrimSuffix(sqlPath, ".sql") + ".golden.err"
 
 		t.Run(name, func(t *testing.T) {
 			sqlBytes, err := os.ReadFile(sqlPath)
@@ -80,20 +89,29 @@ func TestSmoke(t *testing.T) {
 			}
 			sql := strings.TrimSpace(string(sqlBytes))
 
+			tsvExists := fileExists(tsvPath)
+			errExists := fileExists(errPath)
+			if tsvExists && errExists {
+				t.Fatalf("both %s and %s exist; only one golden is allowed per query", tsvPath, errPath)
+			}
+
 			// Act
-			resp := postQuery(t, sql)
-			got := renderTSV(resp)
+			status, body := postQuery(t, sql)
 
 			// Assert
-			assertGolden(t, goldenPath, got)
+			if errExists {
+				assertErrorGolden(t, errPath, status, body)
+				return
+			}
+			assertSuccessGolden(t, tsvPath, status, body)
 		})
 	}
 }
 
-// queryResponse decodes the synchronous query endpoint shape we
-// care about. The full response carries more fields
-// (jobReference, totalRows, ...) but the smoke harness only needs
-// the schema field names and the row values to render TSV.
+// queryResponse decodes the synchronous query endpoint shape we care
+// about. The full response carries more fields (jobReference,
+// totalRows, ...) but the smoke harness only needs the schema field
+// names and the row values to render TSV.
 type queryResponse struct {
 	Schema struct {
 		Fields []struct {
@@ -105,6 +123,15 @@ type queryResponse struct {
 			V string `json:"v"`
 		} `json:"f"`
 	} `json:"rows"`
+}
+
+// errorResponse decodes the BigQuery REST error envelope produced
+// by bigquery-emulator/server/error.go.
+type errorResponse struct {
+	Error struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // renderTSV turns a query response into a tab-separated string with
@@ -131,15 +158,53 @@ func renderTSV(resp queryResponse) string {
 	return sb.String()
 }
 
-// assertGolden compares `got` against the golden file at path.
-// On the first run for a freshly-added query the file does not
-// exist yet — in that case the helper writes `got` as the new
-// golden, logs the creation, and returns without flagging the
-// test as failed. Subsequent runs hit the diff branch.
-//
-// Callers do not need to distinguish "created" from "matched"
-// since both outcomes are a passing test from the test case's
-// point of view; that bookkeeping is the helper's responsibility.
+// assertSuccessGolden expects HTTP 200 and a JSON queryResponse
+// body. Renders the response as TSV and diffs against the golden
+// file at path; creates the golden on first run if it does not
+// exist (see assertGolden).
+func assertSuccessGolden(t *testing.T, path string, status int, body []byte) {
+	t.Helper()
+	if status != http.StatusOK {
+		dumpLogs(t)
+		t.Fatalf("expected HTTP 200, got %d body=%s", status, body)
+	}
+	var resp queryResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, body)
+	}
+	assertGolden(t, path, renderTSV(resp))
+}
+
+// assertErrorGolden expects HTTP non-200 and a BigQuery error
+// envelope. Substring-matches error.message against the golden
+// file at path (callers store only the stable subset of the
+// message — substring rather than exact match because zetasql/
+// emulator error wording is not load-bearing).
+func assertErrorGolden(t *testing.T, path string, status int, body []byte) {
+	t.Helper()
+	if status == http.StatusOK {
+		t.Fatalf("expected HTTP non-200 (golden.err pinned), got 200 body=%s", body)
+	}
+	var resp errorResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode error response: %v (body=%s)", err, body)
+	}
+	wantBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	want := strings.TrimSpace(string(wantBytes))
+	if !strings.Contains(resp.Error.Message, want) {
+		t.Errorf("error.message does not contain golden (%s)\n--- got\n%s\n--- want (substring)\n%s",
+			path, resp.Error.Message, want)
+	}
+}
+
+// assertGolden compares `got` against the golden file at path. On
+// the first run for a freshly-added query the file does not exist
+// yet — in that case the helper writes `got` as the new golden,
+// logs the creation, and returns without flagging the test as
+// failed. Subsequent runs hit the diff branch.
 func assertGolden(t *testing.T, path, got string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -158,12 +223,13 @@ func assertGolden(t *testing.T, path, got string) {
 	}
 }
 
-// postQuery POSTs the SQL to /projects/<project>/queries and
-// returns the parsed response. Fails the test on transport, HTTP,
-// or JSON-decode errors. Dumps the last 50 lines of the
-// container's logs alongside the failure so a single test run
+// postQuery POSTs the SQL to /projects/<project>/queries and returns
+// the HTTP status code and raw response body. The caller decides
+// whether the status was expected — error-path tests want a non-200,
+// success-path tests want a 200. Dumps the last 50 lines of the
+// container's logs on transport failures so a single test run
 // carries the diagnostic trail.
-func postQuery(t *testing.T, sql string) queryResponse {
+func postQuery(t *testing.T, sql string) (int, []byte) {
 	t.Helper()
 	url := fmt.Sprintf("%s/projects/%s/queries", httpAddr, project)
 	body, err := json.Marshal(map[string]any{
@@ -193,16 +259,12 @@ func postQuery(t *testing.T, sql string) queryResponse {
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		dumpLogs(t)
-		t.Fatalf("POST %s: HTTP %d, body=%s", url, resp.StatusCode, raw)
-	}
+	return resp.StatusCode, raw
+}
 
-	var got queryResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decode response: %v (body=%s)", err, raw)
-	}
-	return got
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // dumpLogs prints the last 50 lines of the emulator's container

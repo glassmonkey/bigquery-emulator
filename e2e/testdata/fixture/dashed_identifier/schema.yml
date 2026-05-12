@@ -1,0 +1,38 @@
+# Schema (columns only) for the dashed_identifier caseset.
+# Pair with data.yml; mergefixture combines them into the emulator's
+# --data-from-yaml input.
+projects:
+- id: my-dashed-project
+  datasets:
+    - id: ds
+      tables:
+        - id: t
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+        - id: src
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+        - id: t_insert
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+        - id: t_update
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+        - id: t_delete
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING

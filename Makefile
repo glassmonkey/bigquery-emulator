@@ -8,6 +8,7 @@ REVISION := $(shell git rev-parse --short HEAD)
 	docker/down \
 	docker/logs \
 	docker/healthcheck \
+	e2e/fixture \
 	e2e
 
 # The WASM-based analyzer (zetasql-wasm) replaced the previous
@@ -27,11 +28,27 @@ docker/build:
 	docker build -t bigquery-emulator:${VERSION} \
 		--build-arg REVISION=${REVISION} .
 
+# Merge per-caseset fixture/<caseset>/{schema.yml, data/} into a
+# single fixture/combined.yml that compose mounts into the emulator.
+# Schema (columns) lives in schema.yml; rows live under data/, one
+# file per (project, dataset) named <project>.<dataset>.yml — the
+# project and dataset are recovered from the filename so each
+# data file is a flat `table_id → rows` map without restating the
+# parent path. mergefixture re-joins schema + data by project /
+# dataset / table id. Currently a single caseset
+# (dashed_identifier); add another caseset by dropping a new
+# fixture/<name>/ pair and extending this target's input list.
+e2e/fixture:
+	go run ./e2e/cmd/mergefixture \
+		e2e/testdata/fixture/dashed_identifier \
+		e2e/testdata/fixture/combined.yml
+
 # Bring the emulator up via the e2e compose definition. Always
 # rebuilds the image first (`--build`) so an `up` after a code or
 # Dockerfile change picks up the latest binary instead of an old
-# cached image.
-docker/up:
+# cached image. Depends on e2e/fixture so combined.yml is fresh
+# before the container bind-mounts it.
+docker/up: e2e/fixture
 	docker compose -f e2e/compose.yml up -d --build
 
 docker/down:
