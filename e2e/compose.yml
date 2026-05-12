@@ -2,6 +2,12 @@
 # Brings up the emulator from a freshly built image and exposes the
 # usual REST + Storage gRPC ports. Pair with smoke.sh, which builds,
 # runs, polls, and tears down end-to-end.
+#
+# testdata/fixture/seed.yml is bind-mounted into the container and
+# loaded via --data-from-yaml so cross-project queries (e.g.
+# SELECT ... FROM my-dashed-project.ds.t) resolve against the seeded
+# catalog. The default project stays `test` so existing testdata
+# (select_one.sql) continues to hit /projects/test/queries.
 services:
   bigquery-emulator:
     build:
@@ -12,6 +18,9 @@ services:
     ports:
       - "9050:9050"
       - "9060:9060"
+    volumes:
+      - ./testdata/fixture:/fixture:ro
     command:
       - "--project=test"
+      - "--data-from-yaml=/fixture/seed.yml"
       - "--log-level=info"

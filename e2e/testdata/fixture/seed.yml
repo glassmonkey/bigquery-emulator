@@ -1,0 +1,58 @@
+# Fixture for dashed-identifier e2e cases (project ID contains a
+# dash, dataset `ds`, tables shared across read-only cases plus one
+# table per DML case so state does not leak between subtests).
+projects:
+- id: my-dashed-project
+  datasets:
+    - id: ds
+      tables:
+        - id: t
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+          data:
+            - id: 1
+              val: a
+            - id: 2
+              val: b
+            - id: 3
+              val: c
+        - id: src
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+          data:
+            - id: 2
+              val: B
+            - id: 3
+              val: C
+        - id: t_insert
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+        - id: t_update
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+          data:
+            - id: 1
+              val: original
+        - id: t_delete
+          columns:
+            - name: id
+              type: INTEGER
+            - name: val
+              type: STRING
+          data:
+            - id: 1
+              val: a
+            - id: 2
+              val: b
