@@ -3284,7 +3284,6 @@ SELECT characters, CHARACTER_LENGTH(characters) FROM example`,
 		},
 		{
 			name:         "format timestamp with %t",
-			skipReason: "emulator: format_timestamp with %t produces invalid TIMESTAMP literal during analyze (post-v0.9.0 follow-up)",
 			query:        `SELECT FORMAT('%t', timestamp '2015-09-01 12:34:56 America/Los_Angeles')`,
 			expectedRows: [][]interface{}{{"2015-09-01 19:34:56+00"}},
 		},
