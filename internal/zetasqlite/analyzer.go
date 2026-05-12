@@ -174,12 +174,23 @@ func (a *Analyzer) parseScript(ctx context.Context, query string) ([]parsedStmt,
 		stmtSQL := query[prevPos:loc.BytePosition]
 		switch s := stmt.Root.(type) {
 		case *parsed_ast.BeginEndBlockNode:
-			// BEGIN ... END script block. Unpack into sub-statements
-			// but keep the wrapping SQL for re-analysis since the
-			// sub-statement substring would not parse on its own
-			// (the wrapping block carries declared variables, etc.).
+			// BEGIN ... END script block. Unpack each inner statement
+			// and slice its own source substring out of `query` via the
+			// parse location range. Re-analysing the wrapping BEGIN…END
+			// SQL would re-create a BeginEndBlock root and trip the
+			// analyzer ("Statement not supported: BeginEndBlock"); the
+			// substring is what the analyzer is set up to handle.
+			//
+			// ParseLocationOf returns ok=false for synthesised nodes
+			// without a source range. Fall back to the wrapping SQL in
+			// that case so the analyzer at least gets a chance to run
+			// rather than silently dropping the statement.
 			for _, sub := range s.StatementListNode().StatementList() {
-				out = append(out, parsedStmt{Root: sub, SQL: stmtSQL})
+				subSQL := stmtSQL
+				if loc, ok := parsed_ast.ParseLocationOf(sub); ok {
+					subSQL = query[loc.Start:loc.End]
+				}
+				out = append(out, parsedStmt{Root: sub, SQL: subSQL})
 			}
 		default:
 			if root, ok := stmt.Root.(parsed_ast.StatementNode); ok {
