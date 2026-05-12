@@ -158,3 +158,32 @@ func TestRejectInvalidLiteralCast(t *testing.T) {
 		})
 	}
 }
+
+// TestByteOffsetToLineColumnClampsOutOfRange pins the defensive clamp
+// that turns an out-of-range byte offset into (1, 1) instead of a
+// slice-index panic. Production feeds the helper a parse-location
+// offset that zetasql-wasm guarantees to be in [0, len(sql)] for a
+// valid AST literal, so the gate-level table cannot reach this code
+// path; without this test the clamp is dead-defense with no asserted
+// contract.
+func TestByteOffsetToLineColumnClampsOutOfRange(t *testing.T) {
+	cases := []struct {
+		name   string
+		offset int
+	}{
+		{name: "negative offset", offset: -1},
+		{name: "offset past end of input", offset: 100},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Act
+			gotLine, gotCol := byteOffsetToLineColumn("abc", tc.offset)
+
+			// Assert
+			if gotLine != 1 || gotCol != 1 {
+				t.Errorf("byteOffsetToLineColumn(%q, %d) = (%d, %d), want (1, 1)",
+					"abc", tc.offset, gotLine, gotCol)
+			}
+		})
+	}
+}
