@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -16,13 +17,16 @@ import (
 //     scope of FEATURE_V_1_3_ALLOW_DASHES_IN_TABLE_NAME, or an
 //     emulator-side catalog gap that this pin makes regress-detectable).
 //
+// wantErr is a substring match against err.Error() because emulator does
+// not surface sentinel errors for these failure modes — the zetasql
+// analyzer/parser messages are passed through verbatim.
+//
 // MERGE INTO is intentionally excluded — its current failure is an
 // emulator MERGE-implementation limitation unrelated to dashed
 // identifiers.
 func TestDashedIdentifier_DriverScope(t *testing.T) {
 	cases := []struct {
 		name    string
-		setup   []string
 		sql     string
 		wantErr string
 	}{
@@ -100,15 +104,8 @@ ON a.id = b.id`,
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			db := openDashedFixture(t)
-			defer db.Close()
-			for _, s := range tc.setup {
-				if _, err := db.Exec(s); err != nil {
-					t.Fatalf("setup Exec(%q) err: %v", s, err)
-				}
-			}
 			_, err := db.Exec(tc.sql)
 			if tc.wantErr == "" {
 				if err != nil {
@@ -126,9 +123,15 @@ ON a.id = b.id`,
 	}
 }
 
+// dashedDriverCounter gives each openDashedFixture call a globally unique
+// driver name. sql.Register cannot be called twice with the same name in
+// the same process, which is what `go test -count=N>1` would do if the
+// driver name were derived from t.Name() alone.
+var dashedDriverCounter atomic.Int64
+
 func openDashedFixture(t *testing.T) *sql.DB {
 	t.Helper()
-	driverName := fmt.Sprintf("zetasqlite-dashed-%s", t.Name())
+	driverName := fmt.Sprintf("zetasqlite-dashed-%d", dashedDriverCounter.Add(1))
 	sql.Register(driverName, &ZetaSQLiteDriver{
 		ConnectHook: func(conn *ZetaSQLiteConn) error {
 			return conn.SetNamePath([]string{"my-dashed-project", "ds"})
@@ -138,6 +141,7 @@ func openDashedFixture(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS t (id INT64 NOT NULL, val STRING)`); err != nil {
 		t.Fatal(err)
 	}
