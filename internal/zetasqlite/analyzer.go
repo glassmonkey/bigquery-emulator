@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/glassmonkey/zetasql-wasm"
 	parsed_ast "github.com/glassmonkey/zetasql-wasm/ast"
 	ast "github.com/glassmonkey/zetasql-wasm/resolved_ast"
 	"github.com/glassmonkey/zetasql-wasm/types"
+	"github.com/glassmonkey/zetasql-wasm/wasm/generated"
 )
 
 type Analyzer struct {
@@ -157,9 +161,15 @@ func (a *Analyzer) AddNamePath(path string) error {
 // parsedStmt pairs a parsed statement node with the SQL fragment that
 // produced it, so each statement of a multi-statement script can be
 // re-analysed against its own text rather than the whole script.
+//
+// Start is the byte offset at which SQL begins inside the original
+// script text. AST nodes carry parse-location ranges relative to that
+// original text, so consumers that want positions inside SQL must
+// subtract Start.
 type parsedStmt struct {
-	Root parsed_ast.StatementNode
-	SQL  string
+	Root  parsed_ast.StatementNode
+	SQL   string
+	Start int32
 }
 
 func (a *Analyzer) parseScript(ctx context.Context, query string) ([]parsedStmt, error) {
@@ -187,14 +197,16 @@ func (a *Analyzer) parseScript(ctx context.Context, query string) ([]parsedStmt,
 			// rather than silently dropping the statement.
 			for _, sub := range s.StatementListNode().StatementList() {
 				subSQL := stmtSQL
+				subStart := int32(prevPos)
 				if loc, ok := parsed_ast.ParseLocationOf(sub); ok {
 					subSQL = query[loc.Start:loc.End]
+					subStart = loc.Start
 				}
-				out = append(out, parsedStmt{Root: sub, SQL: subSQL})
+				out = append(out, parsedStmt{Root: sub, SQL: subSQL, Start: subStart})
 			}
 		default:
 			if root, ok := stmt.Root.(parsed_ast.StatementNode); ok {
-				out = append(out, parsedStmt{Root: root, SQL: stmtSQL})
+				out = append(out, parsedStmt{Root: root, SQL: stmtSQL, Start: int32(prevPos)})
 			} else {
 				return nil, fmt.Errorf("unexpected root node %T", stmt.Root)
 			}
@@ -263,7 +275,13 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 			// captured by parseScript. parseScript hands us the per-
 			// statement substring so multi-top-level scripts no longer
 			// fail on the second statement.
-			out, err := a.engine.Analyze(ctx, ps.SQL, a.catalog.SimpleCatalog(), a.opt)
+			//
+			// rewriteNamedTimezoneLiteralsInStmt swaps TIMESTAMP literals
+			// that carry an IANA-named zone (e.g. "America/Los_Angeles")
+			// for the numeric-offset form the WASM analyzer can resolve
+			// without tzdata. See its docstring for rationale.
+			sqlForAnalyze := rewriteNamedTimezoneLiteralsInStmt(ps.Root, ps.SQL, ps.Start)
+			out, err := a.engine.Analyze(ctx, sqlForAnalyze, a.catalog.SimpleCatalog(), a.opt)
 			if err != nil {
 				return nil, fmt.Errorf("failed to analyze: %w", err)
 			}
@@ -273,7 +291,10 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 			// parsed reverse lookup (NodeMap.FindParsedNodes) only works
 			// when both sides come from the same Analyze call.
 			ctx = a.context(ctx, funcMap, stmtNode, out.Parsed)
-			action, err := a.newStmtAction(ctx, ps.SQL, args, stmtNode)
+			// Pass the rewritten SQL so any parse-location lookup against
+			// out.Parsed (which was produced from sqlForAnalyze) lines up
+			// with the text we hand downstream.
+			action, err := a.newStmtAction(ctx, sqlForAnalyze, args, stmtNode)
 			if err != nil {
 				return nil, err
 			}
@@ -869,4 +890,154 @@ func getArgsFromParams(values []driver.NamedValue, params []*ast.ParameterNode) 
 		args = append(args, newNamedValue)
 	}
 	return args, nil
+}
+
+// rewriteNamedTimezoneLiteralsInStmt rewrites TIMESTAMP literals that
+// carry a named IANA timezone (e.g. "America/Los_Angeles") into the
+// numeric-offset form the bundled WASM analyzer accepts.
+//
+// The WASM build of ZetaSQL ships without tzdata, so any TIMESTAMP
+// literal whose string contents end in a named zone is rejected at
+// analyze time with "Invalid TIMESTAMP literal" before reaching the
+// SQLite-side executor (see zetasql-wasm's
+// wasm/assets/patches/zetasql_analyzer_options_timezone.patch). Go's
+// time package has its own tz catalog, so we resolve the wall-time-in-
+// zone here and substitute the equivalent numeric offset (e.g.
+// "-07:00") while preserving the original wall time.
+//
+// stmtStart is the byte offset of stmtSQL inside the script text the
+// parser saw. The walker reads parse-location ranges relative to that
+// script, so we subtract stmtStart to land back inside stmtSQL.
+//
+// Returns stmtSQL unchanged when there is nothing to rewrite. A named
+// zone that Go cannot resolve, or a datetime prefix that none of our
+// layouts can parse, is left alone — the analyzer then surfaces its
+// native error rather than us silently producing a different value.
+func rewriteNamedTimezoneLiteralsInStmt(root parsed_ast.StatementNode, stmtSQL string, stmtStart int32) string {
+	type rewrite struct {
+		relStart, relEnd int
+		text             string
+	}
+	var rewrites []rewrite
+	_ = parsed_ast.Walk(root, func(n parsed_ast.Node) error {
+		lit, ok := n.(*parsed_ast.DateOrTimeLiteralNode)
+		if !ok {
+			return nil
+		}
+		if lit.TypeKind() != generated.TypeKind_TYPE_TIMESTAMP {
+			return nil
+		}
+		sl := lit.StringLiteral()
+		if sl == nil {
+			return nil
+		}
+		rebuilt, changed := rewriteNamedTimezoneInString(sl.StringValue())
+		if !changed {
+			return nil
+		}
+		loc, ok := parsed_ast.ParseLocationOf(sl)
+		if !ok {
+			return nil
+		}
+		relStart := int(loc.Start - stmtStart)
+		relEnd := int(loc.End - stmtStart)
+		if relStart < 0 || relEnd > len(stmtSQL) || relStart > relEnd {
+			return nil
+		}
+		replaced, ok := requoteLiteral(stmtSQL[relStart:relEnd], rebuilt)
+		if !ok {
+			return nil
+		}
+		rewrites = append(rewrites, rewrite{relStart, relEnd, replaced})
+		return nil
+	})
+	if len(rewrites) == 0 {
+		return stmtSQL
+	}
+	sort.Slice(rewrites, func(i, j int) bool {
+		return rewrites[i].relStart > rewrites[j].relStart
+	})
+	out := stmtSQL
+	for _, r := range rewrites {
+		out = out[:r.relStart] + r.text + out[r.relEnd:]
+	}
+	return out
+}
+
+// namedTZSuffixRE matches `<datetime> <Area/City[/...]>` at the end of
+// a TIMESTAMP literal's string contents. The TZ token must contain at
+// least one slash so plain words after the time (which would not be a
+// valid TZ anyway) do not get treated as zones.
+var namedTZSuffixRE = regexp.MustCompile(
+	`^(.*?\S)\s+([A-Za-z][A-Za-z0-9_+\-]*(?:/[A-Za-z][A-Za-z0-9_+\-]*)+)\s*$`,
+)
+
+// datetimeLayouts covers the BigQuery TIMESTAMP-literal datetime
+// shapes documented at https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#timestamp_literals.
+// Subsecond precision uses the 9-digit fraction so shorter fractions
+// (e.g. ".123") still match via the 999999999 placeholder.
+var datetimeLayouts = []string{
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02T15:04:05",
+}
+
+func rewriteNamedTimezoneInString(s string) (string, bool) {
+	m := namedTZSuffixRE.FindStringSubmatch(s)
+	if m == nil {
+		return s, false
+	}
+	datetimePart, tzName := m[1], m[2]
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		return s, false
+	}
+	var parsed time.Time
+	var parseErr error
+	for _, layout := range datetimeLayouts {
+		parsed, parseErr = time.ParseInLocation(layout, datetimePart, loc)
+		if parseErr == nil {
+			break
+		}
+	}
+	if parseErr != nil {
+		return s, false
+	}
+	_, offsetSec := parsed.Zone()
+	return datetimePart + formatTZOffset(offsetSec), true
+}
+
+func formatTZOffset(sec int) string {
+	sign := "+"
+	if sec < 0 {
+		sign = "-"
+		sec = -sec
+	}
+	hours := sec / 3600
+	mins := (sec % 3600) / 60
+	return fmt.Sprintf("%s%02d:%02d", sign, hours, mins)
+}
+
+// requoteLiteral wraps content in the same quote style as rawQuoted.
+// rawQuoted is the full source span of a parsed StringLiteralNode and
+// includes any leading prefix (e.g. `r`, `b`) plus the opening and
+// closing quote runs (single, double, or triple). content is produced
+// by rewriteNamedTimezoneInString from a time.ParseInLocation-accepted
+// datetime prefix and a numeric offset, so it cannot contain the quote
+// or backslash chars that would require escaping.
+func requoteLiteral(rawQuoted, content string) (string, bool) {
+	i := 0
+	for i < len(rawQuoted) && rawQuoted[i] != '\'' && rawQuoted[i] != '"' {
+		i++
+	}
+	if i >= len(rawQuoted) {
+		return "", false
+	}
+	q := rawQuoted[i]
+	run := string(q)
+	if strings.HasPrefix(rawQuoted[i:], string(q)+string(q)+string(q)) {
+		run = strings.Repeat(string(q), 3)
+	}
+	return rawQuoted[:i] + run + content + run, true
 }
