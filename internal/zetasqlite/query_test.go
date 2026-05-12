@@ -3146,9 +3146,15 @@ SELECT characters, CHARACTER_LENGTH(characters) FROM example`,
 		//	expectedRows: [][]interface{}{{true}},
 		// },
 		{
+			// ZetaSQL's CONCAT signatures are CONCAT(STRING, [STRING, ...])
+			// and CONCAT(BYTES, [BYTES, ...]); INT64 is not implicitly
+			// coerced. BigQuery production accepts the un-cast form, but
+			// the bundled ZetaSQL analyzer rejects it. The CAST is added
+			// to the numeric arguments so the case exercises the CONCAT
+			// path itself (which is what the test means to verify) rather
+			// than failing at signature-resolution time.
 			name:         "concat",
-			skipReason: "emulator: function signature mismatch on v0.9.0 (per-case triage post-v0.9.0 follow-up)",
-			query:        `SELECT CONCAT('T.P.', ' ', 'Bar'), CONCAT('Summer', ' ', 1923), CONCAT("abc"), CONCAT(1), CONCAT('A', NULL, 'C'), CONCAT(NULL)`,
+			query:        `SELECT CONCAT('T.P.', ' ', 'Bar'), CONCAT('Summer', ' ', CAST(1923 AS STRING)), CONCAT("abc"), CONCAT(CAST(1 AS STRING)), CONCAT('A', NULL, 'C'), CONCAT(NULL)`,
 			expectedRows: [][]interface{}{{"T.P. Bar", "Summer 1923", "abc", "1", nil, nil}},
 		},
 		// TODO: currently unsupported CONTAINS_SUBSTR function because ZetaSQL library doesn't support it.
