@@ -75,14 +75,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.43.0 h1:8ScK+6/mpKp9QoICALyemgVySEoolMbO2TJMdxzgkr8=
 github.com/fsouza/fake-gcs-server v1.43.0/go.mod h1:zYK0CjlFRY9gpWhukEGWzvGHMQ/g8HoGf/RzpKSqpbs=
-github.com/glassmonkey/zetasql-wasm v0.11.0 h1:BsJqLUNJjWSNbzQijYnDYoykJu2c+LphFESqXRZcF+Q=
-github.com/glassmonkey/zetasql-wasm v0.11.0/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
-github.com/glassmonkey/zetasql-wasm v0.11.1 h1:9iL6RV+7HnVq8jplgLhioIjA4TQjOohzQu5myPHSlro=
-github.com/glassmonkey/zetasql-wasm v0.11.1/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
-github.com/glassmonkey/zetasql-wasm v0.11.2 h1:qE/ViTZD6Tm8BqCcFPjfxCLSxbJU6SWU8+Ao/4Bl6oA=
-github.com/glassmonkey/zetasql-wasm v0.11.2/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
-github.com/glassmonkey/zetasql-wasm v0.11.3 h1:OQKvzpK8PzZr6cGRhL+dgzjmKd4dNyDAWhHGoHNzY44=
-github.com/glassmonkey/zetasql-wasm v0.11.3/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
+github.com/glassmonkey/zetasql-wasm v0.12.0 h1:BMPfu///13i20vhHe20bvvRVFQf5FVJblN4Xj9Ti6tI=
+github.com/glassmonkey/zetasql-wasm v0.12.0/go.mod h1:vWrogSUR0AhpzqQGwkqklmxKIFGBza70Y1vXmCOybsQ=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.1 h1:pKouT5E8xu9zeFC39JXRDukb6JFQPXM5p5I91188VAQ=
 github.com/go-logr/logr v1.4.1/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=

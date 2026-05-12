@@ -5082,7 +5082,7 @@ FROM (
 		// begin-end
 		{
 			name: "begin-end",
-			skipReason: "emulator/zetasql-wasm: post-v0.9.0 follow-up (per-case triage)",
+			skipReason: "emulator: BEGIN-END parses (zetasql-wasm v0.12.0 fix) but analyze fails 'Statement not supported: BeginEndBlock'; needs sub-statement SQL extraction in analyzer.go parseScript (depends on Node.ParseLocationRange — separate zetasql-wasm follow-up)",
 			query: `
 BEGIN
   SELECT 1;
