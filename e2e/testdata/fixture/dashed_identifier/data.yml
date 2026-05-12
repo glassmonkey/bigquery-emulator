@@ -1,0 +1,33 @@
+# Initial data for the dashed_identifier caseset. Schema lives in
+# schema.yml; mergefixture combines the two into the emulator's
+# --data-from-yaml input. Table id must match between this file and
+# schema.yml.
+projects:
+- id: my-dashed-project
+  datasets:
+    - id: ds
+      tables:
+        - id: t
+          data:
+            - id: 1
+              val: a
+            - id: 2
+              val: b
+            - id: 3
+              val: c
+        - id: src
+          data:
+            - id: 2
+              val: B
+            - id: 3
+              val: C
+        - id: t_update
+          data:
+            - id: 1
+              val: original
+        - id: t_delete
+          data:
+            - id: 1
+              val: a
+            - id: 2
+              val: b
