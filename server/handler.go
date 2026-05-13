@@ -331,7 +331,11 @@ func (h *uploadContentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	jobID := uploadID[0]
-	job := project.Job(jobID)
+	job, err := project.Job(ctx, jobID)
+	if err != nil {
+		errorResponse(ctx, w, errJobInternalError(err.Error()))
+		return
+	}
 	if err := h.Handle(ctx, &uploadContentRequest{
 		server:  server,
 		project: project,
@@ -406,7 +410,10 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	load := r.job.Content().Configuration.Load
 	tableRef := load.DestinationTable
 	dataset := r.project.Dataset(tableRef.DatasetId)
-	table := dataset.Table(tableRef.TableId)
+	table, err := dataset.Table(ctx, tableRef.TableId)
+	if err != nil {
+		return err
+	}
 	if table == nil {
 		if load.CreateDisposition == "CREATE_NEVER" {
 			return fmt.Errorf("`%s` is not found", tableRef.TableId)
@@ -422,7 +429,10 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 		}); err != nil {
 			return err
 		}
-		table = dataset.Table(tableRef.TableId)
+		table, err = dataset.Table(ctx, tableRef.TableId)
+		if err != nil {
+			return err
+		}
 	}
 
 	tableContent, err := table.Content()
@@ -609,6 +619,19 @@ type datasetsDeleteRequest struct {
 }
 
 func (h *datasetsDeleteHandler) Handle(ctx context.Context, r *datasetsDeleteRequest) error {
+	// Resolve the table list before opening the delete transaction.
+	// Dataset.Tables now goes through the repository (its own
+	// connection + tx) instead of an in-memory slice, and SQLite
+	// will block / deadlock if a SELECT competes with the write
+	// transaction we are about to start on the same database.
+	var tablesToDelete []*metadata.Table
+	if r.deleteContents {
+		var err error
+		tablesToDelete, err = r.dataset.Tables(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list tables for delete: %w", err)
+		}
+	}
 	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, r.dataset.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get connection: %w", err)
@@ -622,12 +645,14 @@ func (h *datasetsDeleteHandler) Handle(ctx context.Context, r *datasetsDeleteReq
 		return fmt.Errorf("failed to delete dataset: %w", err)
 	}
 	if r.deleteContents {
-		for _, table := range r.dataset.Tables() {
+		tableIDs := make([]string, 0, len(tablesToDelete))
+		for _, table := range tablesToDelete {
 			if err := table.Delete(ctx, tx.Tx()); err != nil {
 				return err
 			}
+			tableIDs = append(tableIDs, table.ID)
 		}
-		if err := r.server.contentRepo.DeleteTables(ctx, tx, r.project.ID, r.dataset.ID, r.dataset.TableIDs()); err != nil {
+		if err := r.server.contentRepo.DeleteTables(ctx, tx, r.project.ID, r.dataset.ID, tableIDs); err != nil {
 			return fmt.Errorf("failed to delete tables: %w", err)
 		}
 	}
@@ -1443,7 +1468,10 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 			if destinationDataset == nil {
 				return nil, fmt.Errorf("failed to find destination dataset: %s", tableRef.DatasetId)
 			}
-			destinationTable := destinationDataset.Table(tableRef.TableId)
+			destinationTable, err := destinationDataset.TableWithConn(ctx, tx.Tx(), tableRef.TableId)
+			if err != nil {
+				return nil, err
+			}
 			destinationTableExists := destinationTable != nil
 			if !destinationTableExists {
 				_, err := createTableMetadata(ctx, tx, r.server, r.project, destinationDataset, tableDef.ToBigqueryV2(r.project.ID, tableRef.DatasetId))
@@ -1601,7 +1629,10 @@ func deleteTableMetadata(ctx context.Context, server *Server, spec *zetasqlite.T
 	if dataset == nil {
 		return fmt.Errorf("dataset %s is not found", datasetID)
 	}
-	table := dataset.Table(tableID)
+	table, err := dataset.Table(ctx, tableID)
+	if err != nil {
+		return err
+	}
 	conn, err := server.connMgr.Connection(ctx, projectID, datasetID)
 	if err != nil {
 		return err
@@ -1685,7 +1716,10 @@ type jobsListRequest struct {
 func (h *jobsListHandler) Handle(ctx context.Context, r *jobsListRequest) (resp *bigqueryv2.JobList, err error) {
 	ctx, end := tracing.Start(ctx, "server.jobs.list")
 	defer end(&err)
-	allJobs := r.project.Jobs()
+	allJobs, err := r.project.Jobs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	trace.SpanFromContext(ctx).SetAttributes(
 		attribute.Int("bqemu.job_count", len(allJobs)),
 	)
@@ -1914,8 +1948,12 @@ type modelsListRequest struct {
 }
 
 func (h *modelsListHandler) Handle(ctx context.Context, r *modelsListRequest) (*bigqueryv2.ListModelsResponse, error) {
+	dsModels, err := r.dataset.Models(ctx)
+	if err != nil {
+		return nil, err
+	}
 	models := []*bigqueryv2.Model{}
-	for _, m := range r.dataset.Models() {
+	for _, m := range dsModels {
 		_ = m
 		models = append(models, &bigqueryv2.Model{})
 	}
@@ -2145,8 +2183,12 @@ type routinesListRequest struct {
 }
 
 func (h *routinesListHandler) Handle(ctx context.Context, r *routinesListRequest) (*bigqueryv2.ListRoutinesResponse, error) {
+	dsRoutines, err := r.dataset.Routines(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var routineList []*bigqueryv2.Routine
-	for _, routine := range r.dataset.Routines() {
+	for _, routine := range dsRoutines {
 		_ = routine
 		routineList = append(routineList, &bigqueryv2.Routine{})
 	}
@@ -2705,9 +2747,14 @@ type tablesListRequest struct {
 }
 
 func (h *tablesListHandler) Handle(ctx context.Context, r *tablesListRequest) (*bigqueryv2.TableList, error) {
+	dsTables, err := r.dataset.Tables(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var tables []*bigqueryv2.TableListTables
-	for _, tableID := range r.dataset.TableIDs() {
-		table, err := r.dataset.Table(tableID).Content()
+	for _, t := range dsTables {
+		tableID := t.ID
+		table, err := t.Content()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get table metadata from %s: %w", tableID, err)
 		}

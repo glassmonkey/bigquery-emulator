@@ -42,24 +42,21 @@ func sequentialAccessMiddleware() func(http.Handler) http.Handler {
 
 // tracingMiddleware wraps the request in an otelhttp incoming
 // span and stashes the server's tracer in ctx so handler code
-// can pull it via tracing.FromContext and open child spans
-// without depending on a global TracerProvider.
+// can pull it via tracing.FromContext and open child spans.
 //
-// otelhttp creates the parent (incoming) span using the server's
-// TracerProvider explicitly so a no-op default doesn't get
-// silently overridden by anything the embedder may have set on
-// the otel package-level global.
+// otelhttp resolves its TracerProvider lazily from the otel
+// package-level global on every request. SetOTel keeps that
+// global in sync with s.tracer so toggling tracing at runtime
+// — or wiring it up *after* server.New has already been called
+// — takes effect on the next request, instead of being baked
+// in at middleware-construction time.
 func tracingMiddleware(s *Server) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		injected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := tracing.WithTracer(r.Context(), s.tracer)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
-		return otelhttp.NewHandler(
-			injected,
-			"bigquery-emulator",
-			otelhttp.WithTracerProvider(s.tracerProvider),
-		)
+		return otelhttp.NewHandler(injected, "bigquery-emulator")
 	}
 }
 
@@ -262,23 +259,22 @@ func withJobMiddleware() func(http.Handler) http.Handler {
 			jobID, exists := jobIDFromParams(params)
 			if exists {
 				project := projectFromContext(ctx)
-				// project.Job is the leading suspect for "performance
-				// degrades with the number of queries": every poll on
-				// /jobs/<id> and /queries/<id> hits this lookup, so if
-				// it walks the project's job slice linearly the cost
-				// grows with the number of completed jobs.
+				// project.Job now resolves through a primary-key seek on
+				// `jobs(projectID, id)` instead of walking an in-memory
+				// slice that grew with the number of completed jobs.
+				// Issue #90 traced the prior O(N) cost back here, so the
+				// span name is kept stable for before/after comparison.
 				lookupCtx, end := tracing.Start(ctx, "middleware.findJob")
 				trace.SpanFromContext(lookupCtx).SetAttributes(
 					attribute.String("bqemu.job_id", jobID),
 				)
-				job := project.Job(jobID)
-				var notFound error
-				if job == nil {
-					notFound = fmt.Errorf("job %s is not found", jobID)
+				job, lookupErr := project.Job(lookupCtx, jobID)
+				if lookupErr == nil && job == nil {
+					lookupErr = fmt.Errorf("job %s is not found", jobID)
 				}
-				end(&notFound)
+				end(&lookupErr)
 				if job == nil {
-					errorResponse(ctx, w, errNotFound(notFound.Error()))
+					errorResponse(ctx, w, errNotFound(lookupErr.Error()))
 					return
 				}
 				ctx = withJob(ctx, job)
@@ -299,7 +295,11 @@ func withTableMiddleware() func(http.Handler) http.Handler {
 			tableID, exists := tableIDFromParams(params)
 			if exists {
 				dataset := datasetFromContext(ctx)
-				table := dataset.Table(tableID)
+				table, err := dataset.Table(ctx, tableID)
+				if err != nil {
+					errorResponse(ctx, w, errInternalError(err.Error()))
+					return
+				}
 				if table == nil {
 					errorResponse(ctx, w, errNotFound(fmt.Sprintf("table %s is not found", tableID)))
 					return
@@ -322,7 +322,11 @@ func withModelMiddleware() func(http.Handler) http.Handler {
 			modelID, exists := modelIDFromParams(params)
 			if exists {
 				dataset := datasetFromContext(ctx)
-				model := dataset.Model(modelID)
+				model, err := dataset.Model(ctx, modelID)
+				if err != nil {
+					errorResponse(ctx, w, errInternalError(err.Error()))
+					return
+				}
 				if model == nil {
 					errorResponse(ctx, w, errNotFound(fmt.Sprintf("model %s is not found", modelID)))
 					return
@@ -345,7 +349,11 @@ func withRoutineMiddleware() func(http.Handler) http.Handler {
 			routineID, exists := routineIDFromParams(params)
 			if exists {
 				dataset := datasetFromContext(ctx)
-				routine := dataset.Routine(routineID)
+				routine, err := dataset.Routine(ctx, routineID)
+				if err != nil {
+					errorResponse(ctx, w, errInternalError(err.Error()))
+					return
+				}
 				if routine == nil {
 					errorResponse(ctx, w, errNotFound(fmt.Sprintf("routine %s is not found", routineID)))
 					return

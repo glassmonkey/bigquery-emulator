@@ -19,7 +19,6 @@ var schemata = []string{
 CREATE TABLE IF NOT EXISTS projects (
   id         STRING NOT NULL,
   datasetIDs ARRAY<STRING>,
-  jobIDs     ARRAY<STRING>,
   PRIMARY KEY (id)
 )`,
 	`
@@ -35,9 +34,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS datasets (
   id         STRING NOT NULL,
   projectID  STRING NOT NULL,
-  tableIDs   ARRAY<STRING>,
-  modelIDs   ARRAY<STRING>,
-  routineIDs ARRAY<STRING>,
   metadata   STRING,
   PRIMARY KEY (projectID, id)
 )`,
@@ -110,11 +106,11 @@ func (r *Repository) ProjectFromData(data *types.Project) *Project {
 	for _, ds := range data.Datasets {
 		datasets = append(datasets, r.DatasetFromData(data.ID, ds))
 	}
-	jobs := make([]*Job, 0, len(data.Jobs))
-	for _, j := range data.Jobs {
-		jobs = append(jobs, r.JobFromData(data.ID, j))
-	}
-	return NewProject(r, data.ID, datasets, jobs)
+	// Jobs are no longer materialised on the Project struct; they live
+	// in the `jobs` table keyed by projectID and are fetched on demand
+	// via Project.Job / Project.Jobs. Callers that need to seed jobs
+	// at load time should AddJob them after constructing the project.
+	return NewProject(r, data.ID, datasets)
 }
 
 func (r *Repository) DatasetFromData(projectID string, data *types.Dataset) *Dataset {
@@ -188,7 +184,13 @@ func (r *Repository) FindProject(ctx context.Context, id string) (*Project, erro
 }
 
 func (r *Repository) findProjects(ctx context.Context, tx *sql.Tx, ids []string) ([]*Project, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT id, datasetIDs, jobIDs FROM projects WHERE id IN UNNEST(@ids)", ids)
+	// Project rows no longer carry a `jobIDs` array — jobs are owned
+	// by the `jobs` table (keyed by projectID) and resolved on demand
+	// via Project.Job / Project.Jobs. Keeping the parent row free of
+	// the child list is what makes middleware lookups stay O(1) in
+	// the number of completed jobs (issue #90); the same shape now
+	// applies to datasets → tables / models / routines.
+	rows, err := tx.QueryContext(ctx, "SELECT id, datasetIDs FROM projects WHERE id IN UNNEST(@ids)", ids)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get projects: %w", err)
 	}
@@ -198,20 +200,15 @@ func (r *Repository) findProjects(ctx context.Context, tx *sql.Tx, ids []string)
 		var (
 			projectID  string
 			datasetIDs []interface{}
-			jobIDs     []interface{}
 		)
-		if err := rows.Scan(&projectID, &datasetIDs, &jobIDs); err != nil {
+		if err := rows.Scan(&projectID, &datasetIDs); err != nil {
 			return nil, err
 		}
 		datasets, err := r.findDatasets(ctx, tx, projectID, r.convertToStrings(datasetIDs))
 		if err != nil {
 			return nil, err
 		}
-		jobs, err := r.findJobs(ctx, tx, projectID, r.convertToStrings(jobIDs))
-		if err != nil {
-			return nil, err
-		}
-		projects = append(projects, NewProject(r, projectID, datasets, jobs))
+		projects = append(projects, NewProject(r, projectID, datasets))
 	}
 	return projects, nil
 }
@@ -229,7 +226,7 @@ func (r *Repository) FindAllProjects(ctx context.Context) ([]*Project, error) {
 	}
 	defer tx.Commit()
 
-	rows, err := tx.QueryContext(ctx, "SELECT id, datasetIDs, jobIDs FROM projects")
+	rows, err := tx.QueryContext(ctx, "SELECT id, datasetIDs FROM projects")
 	if err != nil {
 		return nil, err
 	}
@@ -240,20 +237,15 @@ func (r *Repository) FindAllProjects(ctx context.Context) ([]*Project, error) {
 		var (
 			projectID  string
 			datasetIDs []interface{}
-			jobIDs     []interface{}
 		)
-		if err := rows.Scan(&projectID, &datasetIDs, &jobIDs); err != nil {
+		if err := rows.Scan(&projectID, &datasetIDs); err != nil {
 			return nil, err
 		}
 		datasets, err := r.findDatasets(ctx, tx, projectID, r.convertToStrings(datasetIDs))
 		if err != nil {
 			return nil, err
 		}
-		jobs, err := r.findJobs(ctx, tx, projectID, r.convertToStrings(jobIDs))
-		if err != nil {
-			return nil, err
-		}
-		projects = append(projects, NewProject(r, projectID, datasets, jobs))
+		projects = append(projects, NewProject(r, projectID, datasets))
 	}
 	return projects, nil
 }
@@ -271,10 +263,9 @@ func (r *Repository) AddProjectIfNotExists(ctx context.Context, tx *sql.Tx, proj
 
 func (r *Repository) AddProject(ctx context.Context, tx *sql.Tx, project *Project) error {
 	if _, err := tx.Exec(
-		"INSERT projects (id, datasetIDs, jobIDs) VALUES (@id, @datasetIDs, @jobIDs)",
+		"INSERT projects (id, datasetIDs) VALUES (@id, @datasetIDs)",
 		sql.Named("id", project.ID),
 		sql.Named("datasetIDs", project.DatasetIDs()),
-		sql.Named("jobIDs", project.JobIDs()),
 	); err != nil {
 		return err
 	}
@@ -283,10 +274,9 @@ func (r *Repository) AddProject(ctx context.Context, tx *sql.Tx, project *Projec
 
 func (r *Repository) UpdateProject(ctx context.Context, tx *sql.Tx, project *Project) error {
 	if _, err := tx.Exec(
-		"UPDATE projects SET datasetIDs = @datasetIDs, jobIDs = @jobIDs WHERE id = @id",
+		"UPDATE projects SET datasetIDs = @datasetIDs WHERE id = @id",
 		sql.Named("id", project.ID),
 		sql.Named("datasetIDs", project.DatasetIDs()),
-		sql.Named("jobIDs", project.JobIDs()),
 	); err != nil {
 		return err
 	}
@@ -311,6 +301,14 @@ func (r *Repository) FindJob(ctx context.Context, projectID, jobID string) (*Job
 		return nil, err
 	}
 	defer tx.Commit()
+	return r.FindJobWithConn(ctx, tx, projectID, jobID)
+}
+
+// FindJobWithConn is the tx-bound variant of FindJob. Callers that
+// already hold a transaction (e.g. handler-side job mutations that
+// must stay in the same tx as the surrounding work) use this to
+// avoid opening a second connection.
+func (r *Repository) FindJobWithConn(ctx context.Context, tx *sql.Tx, projectID, jobID string) (*Job, error) {
 	jobs, err := r.findJobs(ctx, tx, projectID, []string{jobID})
 	if err != nil {
 		return nil, err
@@ -324,6 +322,36 @@ func (r *Repository) FindJob(ctx context.Context, projectID, jobID string) (*Job
 	return jobs[0], nil
 }
 
+// FindJobsByProject returns every job belonging to projectID. The
+// primary key on `jobs(projectID, id)` confines the scan to the
+// project's bucket — independent of how many jobs other projects
+// have accumulated.
+func (r *Repository) FindJobsByProject(ctx context.Context, projectID string) ([]*Job, error) {
+	conn, err := r.getConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Commit()
+	return r.findJobsByProject(ctx, tx, projectID)
+}
+
+func (r *Repository) findJobsByProject(ctx context.Context, tx *sql.Tx, projectID string) ([]*Job, error) {
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT id, projectID, metadata, result, error FROM jobs WHERE projectID = @projectID",
+		sql.Named("projectID", projectID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.scanJobs(rows)
+}
+
 func (r *Repository) findJobs(ctx context.Context, tx *sql.Tx, projectID string, jobIDs []string) ([]*Job, error) {
 	rows, err := tx.QueryContext(
 		ctx,
@@ -334,6 +362,13 @@ func (r *Repository) findJobs(ctx context.Context, tx *sql.Tx, projectID string,
 	if err != nil {
 		return nil, err
 	}
+	return r.scanJobs(rows)
+}
+
+// scanJobs decodes the rows returned by a `SELECT id, projectID,
+// metadata, result, error FROM jobs ...` query into *Job values.
+// Closes the rows on exit so callers don't have to.
+func (r *Repository) scanJobs(rows *sql.Rows) ([]*Job, error) {
 	defer rows.Close()
 	jobs := []*Job{}
 	for rows.Next() {
@@ -459,8 +494,11 @@ func (r *Repository) FindDataset(ctx context.Context, projectID, datasetID strin
 }
 
 func (r *Repository) findDatasets(ctx context.Context, tx *sql.Tx, projectID string, datasetIDs []string) ([]*Dataset, error) {
+	// Datasets no longer eager-load their tables / models / routines.
+	// Each child lives in its own table keyed by (projectID, datasetID,
+	// id) and is resolved on demand via Dataset.Table / .Tables etc.
 	rows, err := tx.QueryContext(ctx,
-		"SELECT id, projectID, tableIDs, modelIDs, routineIDs, metadata FROM datasets WHERE projectID = @projectID AND id IN UNNEST(@datasetIDs)",
+		"SELECT id, projectID, metadata FROM datasets WHERE projectID = @projectID AND id IN UNNEST(@datasetIDs)",
 		sql.Named("projectID", projectID),
 		sql.Named("datasetIDs", datasetIDs),
 	)
@@ -472,26 +510,11 @@ func (r *Repository) findDatasets(ctx context.Context, tx *sql.Tx, projectID str
 	datasets := []*Dataset{}
 	for rows.Next() {
 		var (
-			datasetID  string
-			projectID  string
-			tableIDs   []interface{}
-			modelIDs   []interface{}
-			routineIDs []interface{}
-			metadata   string
+			datasetID string
+			projectID string
+			metadata  string
 		)
-		if err := rows.Scan(&datasetID, &projectID, &tableIDs, &modelIDs, &routineIDs, &metadata); err != nil {
-			return nil, err
-		}
-		tables, err := r.findTables(ctx, tx, projectID, datasetID, r.convertToStrings(tableIDs))
-		if err != nil {
-			return nil, err
-		}
-		models, err := r.findModels(ctx, tx, projectID, datasetID, r.convertToStrings(modelIDs))
-		if err != nil {
-			return nil, err
-		}
-		routines, err := r.findRoutines(ctx, tx, projectID, datasetID, r.convertToStrings(routineIDs))
-		if err != nil {
+		if err := rows.Scan(&datasetID, &projectID, &metadata); err != nil {
 			return nil, err
 		}
 		var content bigqueryv2.Dataset
@@ -500,7 +523,7 @@ func (r *Repository) findDatasets(ctx context.Context, tx *sql.Tx, projectID str
 		}
 		datasets = append(
 			datasets,
-			NewDataset(r, projectID, datasetID, &content, tables, models, routines),
+			NewDataset(r, projectID, datasetID, &content, nil, nil, nil),
 		)
 	}
 	return datasets, nil
@@ -512,12 +535,9 @@ func (r *Repository) AddDataset(ctx context.Context, tx *sql.Tx, dataset *Datase
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT datasets (id, projectID, tableIDs, modelIDs, routineIDs, metadata) VALUES (@id, @projectID, @tableIDs, @modelIDs, @routineIDs, @metadata)",
+		"INSERT datasets (id, projectID, metadata) VALUES (@id, @projectID, @metadata)",
 		sql.Named("id", dataset.ID),
 		sql.Named("projectID", dataset.ProjectID),
-		sql.Named("tableIDs", dataset.TableIDs()),
-		sql.Named("modelIDs", dataset.ModelIDs()),
-		sql.Named("routineIDs", dataset.RoutineIDs()),
 		sql.Named("metadata", string(metadata)),
 	); err != nil {
 		return err
@@ -531,12 +551,9 @@ func (r *Repository) UpdateDataset(ctx context.Context, tx *sql.Tx, dataset *Dat
 		return err
 	}
 	if _, err := tx.Exec(
-		"UPDATE datasets SET tableIDs = @tableIDs, modelIDs = @modelIDs, routineIDs = @routineIDs, metadata = @metadata WHERE projectID = @projectID AND id = @id",
+		"UPDATE datasets SET metadata = @metadata WHERE projectID = @projectID AND id = @id",
 		sql.Named("id", dataset.ID),
 		sql.Named("projectID", dataset.ProjectID),
-		sql.Named("tableIDs", dataset.TableIDs()),
-		sql.Named("modelIDs", dataset.ModelIDs()),
-		sql.Named("routineIDs", dataset.RoutineIDs()),
 		sql.Named("metadata", string(metadata)),
 	); err != nil {
 		return err
@@ -566,6 +583,12 @@ func (r *Repository) FindTable(ctx context.Context, projectID, datasetID, tableI
 		return nil, err
 	}
 	defer tx.Commit()
+	return r.FindTableWithConn(ctx, tx, projectID, datasetID, tableID)
+}
+
+// FindTableWithConn is the tx-bound variant of FindTable for
+// callers that already own a transaction.
+func (r *Repository) FindTableWithConn(ctx context.Context, tx *sql.Tx, projectID, datasetID, tableID string) (*Table, error) {
 	tables, err := r.findTables(ctx, tx, projectID, datasetID, []string{tableID})
 	if err != nil {
 		return nil, err
@@ -579,6 +602,32 @@ func (r *Repository) FindTable(ctx context.Context, projectID, datasetID, tableI
 	return tables[0], nil
 }
 
+// FindTablesByDataset returns every table that belongs to
+// (projectID, datasetID). The composite primary key on `tables`
+// confines the scan to that dataset.
+func (r *Repository) FindTablesByDataset(ctx context.Context, projectID, datasetID string) ([]*Table, error) {
+	conn, err := r.getConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Commit()
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT id, metadata FROM tables WHERE projectID = @projectID AND datasetID = @datasetID",
+		sql.Named("projectID", projectID),
+		sql.Named("datasetID", datasetID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.scanTables(rows, projectID, datasetID)
+}
+
 func (r *Repository) findTables(ctx context.Context, tx *sql.Tx, projectID, datasetID string, tableIDs []string) ([]*Table, error) {
 	rows, err := tx.QueryContext(
 		ctx,
@@ -590,8 +639,11 @@ func (r *Repository) findTables(ctx context.Context, tx *sql.Tx, projectID, data
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return r.scanTables(rows, projectID, datasetID)
+}
 
+func (r *Repository) scanTables(rows *sql.Rows, projectID, datasetID string) ([]*Table, error) {
+	defer rows.Close()
 	tables := []*Table{}
 	for rows.Next() {
 		var (
@@ -670,6 +722,11 @@ func (r *Repository) FindModel(ctx context.Context, projectID, datasetID, modelI
 		return nil, err
 	}
 	defer tx.Commit()
+	return r.FindModelWithConn(ctx, tx, projectID, datasetID, modelID)
+}
+
+// FindModelWithConn is the tx-bound variant of FindModel.
+func (r *Repository) FindModelWithConn(ctx context.Context, tx *sql.Tx, projectID, datasetID, modelID string) (*Model, error) {
 	models, err := r.findModels(ctx, tx, projectID, datasetID, []string{modelID})
 	if err != nil {
 		return nil, err
@@ -683,6 +740,30 @@ func (r *Repository) FindModel(ctx context.Context, projectID, datasetID, modelI
 	return models[0], nil
 }
 
+// FindModelsByDataset returns every model in (projectID, datasetID).
+func (r *Repository) FindModelsByDataset(ctx context.Context, projectID, datasetID string) ([]*Model, error) {
+	conn, err := r.getConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Commit()
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT id, metadata FROM models WHERE projectID = @projectID AND datasetID = @datasetID",
+		sql.Named("projectID", projectID),
+		sql.Named("datasetID", datasetID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.scanModels(rows, projectID, datasetID)
+}
+
 func (r *Repository) findModels(ctx context.Context, tx *sql.Tx, projectID, datasetID string, modelIDs []string) ([]*Model, error) {
 	rows, err := tx.QueryContext(
 		ctx,
@@ -694,8 +775,11 @@ func (r *Repository) findModels(ctx context.Context, tx *sql.Tx, projectID, data
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return r.scanModels(rows, projectID, datasetID)
+}
 
+func (r *Repository) scanModels(rows *sql.Rows, projectID, datasetID string) ([]*Model, error) {
+	defer rows.Close()
 	models := []*Model{}
 	for rows.Next() {
 		var (
@@ -774,7 +858,11 @@ func (r *Repository) FindRoutine(ctx context.Context, projectID, datasetID, rout
 		return nil, err
 	}
 	defer tx.Commit()
+	return r.FindRoutineWithConn(ctx, tx, projectID, datasetID, routineID)
+}
 
+// FindRoutineWithConn is the tx-bound variant of FindRoutine.
+func (r *Repository) FindRoutineWithConn(ctx context.Context, tx *sql.Tx, projectID, datasetID, routineID string) (*Routine, error) {
 	routines, err := r.findRoutines(ctx, tx, projectID, datasetID, []string{routineID})
 	if err != nil {
 		return nil, err
@@ -788,6 +876,30 @@ func (r *Repository) FindRoutine(ctx context.Context, projectID, datasetID, rout
 	return routines[0], nil
 }
 
+// FindRoutinesByDataset returns every routine in (projectID, datasetID).
+func (r *Repository) FindRoutinesByDataset(ctx context.Context, projectID, datasetID string) ([]*Routine, error) {
+	conn, err := r.getConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Commit()
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT id, metadata FROM routines WHERE projectID = @projectID AND datasetID = @datasetID",
+		sql.Named("projectID", projectID),
+		sql.Named("datasetID", datasetID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.scanRoutines(rows, projectID, datasetID)
+}
+
 func (r *Repository) findRoutines(ctx context.Context, tx *sql.Tx, projectID, datasetID string, routineIDs []string) ([]*Routine, error) {
 	rows, err := tx.QueryContext(
 		ctx,
@@ -799,8 +911,11 @@ func (r *Repository) findRoutines(ctx context.Context, tx *sql.Tx, projectID, da
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return r.scanRoutines(rows, projectID, datasetID)
+}
 
+func (r *Repository) scanRoutines(rows *sql.Rows, projectID, datasetID string) ([]*Routine, error) {
+	defer rows.Close()
 	routines := []*Routine{}
 	for rows.Next() {
 		var (

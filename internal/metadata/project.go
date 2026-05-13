@@ -7,12 +7,17 @@ import (
 	"sync"
 )
 
+// Project bundles a BigQuery project's identity together with its
+// datasets, which are kept in memory and synced through the
+// underlying SQL store. Jobs are deliberately *not* held on the
+// Project struct: they live in the `jobs` table keyed by projectID
+// and are fetched on demand. Materialising the job list on every
+// project lookup made `withProjectMiddleware` cost O(N) per request
+// in the number of completed jobs — see issue #90.
 type Project struct {
 	ID         string
 	datasets   []*Dataset
 	datasetMap map[string]*Dataset
-	jobs       []*Job
-	jobMap     map[string]*Job
 	mu         sync.RWMutex
 	repo       *Repository
 }
@@ -25,24 +30,26 @@ func (p *Project) DatasetIDs() []string {
 	return ids
 }
 
-func (p *Project) JobIDs() []string {
-	ids := make([]string, len(p.jobs))
-	for i := 0; i < len(p.jobs); i++ {
-		ids[i] = p.jobs[i].ID
-	}
-	return ids
+// Job resolves a single job by ID through the repository. The lookup
+// is a primary-key seek on `jobs(projectID, id)` so it stays O(1)
+// regardless of how many jobs the project has accumulated.
+// Job opens its own DB connection. Callers already holding a
+// transaction must use JobWithConn instead — using Job from
+// inside an open write tx on the same SQLite database deadlocks.
+func (p *Project) Job(ctx context.Context, id string) (*Job, error) {
+	return p.repo.FindJob(ctx, p.ID, id)
 }
 
-func (p *Project) Job(id string) *Job {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.jobMap[id]
+// JobWithConn is the tx-bound variant of Job.
+func (p *Project) JobWithConn(ctx context.Context, tx *sql.Tx, id string) (*Job, error) {
+	return p.repo.FindJobWithConn(ctx, tx, p.ID, id)
 }
 
-func (p *Project) Jobs() []*Job {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.jobs
+// Jobs returns every job belonging to this project. The cost is
+// O(M) in the project's own job count, not in the cluster-wide
+// total — the index on `jobs(projectID, id)` confines the scan.
+func (p *Project) Jobs(ctx context.Context) ([]*Job, error) {
+	return p.repo.FindJobsByProject(ctx, p.ID)
 }
 
 func (p *Project) Dataset(id string) *Dataset {
@@ -107,63 +114,37 @@ func (p *Project) DeleteDataset(ctx context.Context, tx *sql.Tx, id string) erro
 	return nil
 }
 
+// AddJob writes a new job for this project to the `jobs` table.
+// Unlike before, no in-memory cache is updated and the parent
+// `projects` row is not touched — the job's `projectID` column
+// is enough to put it in this project's bucket.
 func (p *Project) AddJob(ctx context.Context, tx *sql.Tx, job *Job) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, exists := p.jobMap[job.ID]; exists {
-		return fmt.Errorf("job %s is already created", job.ID)
-	}
-	if err := job.Insert(ctx, tx); err != nil {
-		return err
-	}
-	p.jobs = append(p.jobs, job)
-	p.jobMap[job.ID] = job
-	if err := p.repo.UpdateProject(ctx, tx, p); err != nil {
-		return err
-	}
-	return nil
+	return job.Insert(ctx, tx)
 }
 
+// DeleteJob removes a job from the `jobs` table. Same shape as
+// AddJob: no parent-row update, no in-memory state to keep in
+// sync.
 func (p *Project) DeleteJob(ctx context.Context, tx *sql.Tx, id string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	job, exists := p.jobMap[id]
-	if !exists {
+	job, err := p.repo.FindJobWithConn(ctx, tx, p.ID, id)
+	if err != nil {
+		return err
+	}
+	if job == nil {
 		return fmt.Errorf("job '%s' is not found in project '%s'", id, p.ID)
 	}
-	if err := job.Delete(ctx, tx); err != nil {
-		return err
-	}
-	newJobs := make([]*Job, 0, len(p.jobs))
-	for _, job := range p.jobs {
-		if job.ID == id {
-			continue
-		}
-		newJobs = append(newJobs, job)
-	}
-	p.jobs = newJobs
-	delete(p.jobMap, id)
-	if err := p.repo.UpdateProject(ctx, tx, p); err != nil {
-		return err
-	}
-	return nil
+	return job.Delete(ctx, tx)
 }
 
-func NewProject(repo *Repository, id string, datasets []*Dataset, jobs []*Job) *Project {
+func NewProject(repo *Repository, id string, datasets []*Dataset) *Project {
 	datasetMap := map[string]*Dataset{}
 	for _, dataset := range datasets {
 		datasetMap[dataset.ID] = dataset
 	}
-	jobMap := map[string]*Job{}
-	for _, job := range jobs {
-		jobMap[job.ID] = job
-	}
 	return &Project{
 		ID:         id,
 		datasets:   datasets,
-		jobs:       jobs,
 		datasetMap: datasetMap,
-		jobMap:     jobMap,
 		repo:       repo,
 	}
 }

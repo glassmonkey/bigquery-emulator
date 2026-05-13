@@ -207,7 +207,7 @@ func (s *Server) SetProject(id string) error {
 	if err := s.metaRepo.AddProjectIfNotExists(
 		ctx,
 		tx.Tx(),
-		metadata.NewProject(s.metaRepo, id, nil, nil),
+		metadata.NewProject(s.metaRepo, id, nil),
 	); err != nil {
 		return err
 	}
