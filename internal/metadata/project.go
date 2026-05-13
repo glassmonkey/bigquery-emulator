@@ -33,8 +33,16 @@ func (p *Project) DatasetIDs() []string {
 // Job resolves a single job by ID through the repository. The lookup
 // is a primary-key seek on `jobs(projectID, id)` so it stays O(1)
 // regardless of how many jobs the project has accumulated.
+// Job opens its own DB connection. Callers already holding a
+// transaction must use JobWithConn instead — using Job from
+// inside an open write tx on the same SQLite database deadlocks.
 func (p *Project) Job(ctx context.Context, id string) (*Job, error) {
 	return p.repo.FindJob(ctx, p.ID, id)
+}
+
+// JobWithConn is the tx-bound variant of Job.
+func (p *Project) JobWithConn(ctx context.Context, tx *sql.Tx, id string) (*Job, error) {
+	return p.repo.FindJobWithConn(ctx, tx, p.ID, id)
 }
 
 // Jobs returns every job belonging to this project. The cost is

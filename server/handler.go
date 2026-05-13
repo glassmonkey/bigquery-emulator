@@ -619,6 +619,19 @@ type datasetsDeleteRequest struct {
 }
 
 func (h *datasetsDeleteHandler) Handle(ctx context.Context, r *datasetsDeleteRequest) error {
+	// Resolve the table list before opening the delete transaction.
+	// Dataset.Tables now goes through the repository (its own
+	// connection + tx) instead of an in-memory slice, and SQLite
+	// will block / deadlock if a SELECT competes with the write
+	// transaction we are about to start on the same database.
+	var tablesToDelete []*metadata.Table
+	if r.deleteContents {
+		var err error
+		tablesToDelete, err = r.dataset.Tables(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list tables for delete: %w", err)
+		}
+	}
 	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, r.dataset.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get connection: %w", err)
@@ -632,12 +645,8 @@ func (h *datasetsDeleteHandler) Handle(ctx context.Context, r *datasetsDeleteReq
 		return fmt.Errorf("failed to delete dataset: %w", err)
 	}
 	if r.deleteContents {
-		tables, err := r.dataset.Tables(ctx)
-		if err != nil {
-			return err
-		}
-		tableIDs := make([]string, 0, len(tables))
-		for _, table := range tables {
+		tableIDs := make([]string, 0, len(tablesToDelete))
+		for _, table := range tablesToDelete {
 			if err := table.Delete(ctx, tx.Tx()); err != nil {
 				return err
 			}
@@ -1459,7 +1468,7 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 			if destinationDataset == nil {
 				return nil, fmt.Errorf("failed to find destination dataset: %s", tableRef.DatasetId)
 			}
-			destinationTable, err := destinationDataset.Table(ctx, tableRef.TableId)
+			destinationTable, err := destinationDataset.TableWithConn(ctx, tx.Tx(), tableRef.TableId)
 			if err != nil {
 				return nil, err
 			}

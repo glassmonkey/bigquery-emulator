@@ -134,16 +134,34 @@ func (d *Dataset) DeleteRoutine(ctx context.Context, tx *sql.Tx, id string) erro
 
 // Table resolves one table by primary-key seek on the `tables`
 // table — O(1) regardless of how many tables the dataset has.
+// This opens a fresh DB connection; callers that already hold a
+// transaction should use TableWithConn to avoid an internal
+// SQLite lock conflict with their own write tx.
 func (d *Dataset) Table(ctx context.Context, id string) (*Table, error) {
 	return d.repo.FindTable(ctx, d.ProjectID, d.ID, id)
+}
+
+// TableWithConn is the tx-bound variant of Table for callers that
+// already own a transaction. Using Table from inside a write tx on
+// the same SQLite database deadlocks against the writer's own lock.
+func (d *Dataset) TableWithConn(ctx context.Context, tx *sql.Tx, id string) (*Table, error) {
+	return d.repo.FindTableWithConn(ctx, tx, d.ProjectID, d.ID, id)
 }
 
 func (d *Dataset) Model(ctx context.Context, id string) (*Model, error) {
 	return d.repo.FindModel(ctx, d.ProjectID, d.ID, id)
 }
 
+func (d *Dataset) ModelWithConn(ctx context.Context, tx *sql.Tx, id string) (*Model, error) {
+	return d.repo.FindModelWithConn(ctx, tx, d.ProjectID, d.ID, id)
+}
+
 func (d *Dataset) Routine(ctx context.Context, id string) (*Routine, error) {
 	return d.repo.FindRoutine(ctx, d.ProjectID, d.ID, id)
+}
+
+func (d *Dataset) RoutineWithConn(ctx context.Context, tx *sql.Tx, id string) (*Routine, error) {
+	return d.repo.FindRoutineWithConn(ctx, tx, d.ProjectID, d.ID, id)
 }
 
 func (d *Dataset) Tables(ctx context.Context) ([]*Table, error) {
