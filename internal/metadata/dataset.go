@@ -5,55 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 )
 
 var ErrDuplicatedTable = errors.New("table is already created")
 
+// Dataset carries a BigQuery dataset's identity plus its inline
+// metadata blob. Like Project, it deliberately does *not* hold its
+// children (tables / models / routines) in memory — each child
+// row is keyed by `(projectID, datasetID, id)` in its own table
+// and resolved on demand. Materialising the full child list on
+// every dataset lookup was the same O(N) trap issue #90 hit on
+// the projects → jobs side.
 type Dataset struct {
-	ID         string
-	ProjectID  string
-	tables     []*Table
-	tableMap   map[string]*Table
-	models     []*Model
-	modelMap   map[string]*Model
-	routines   []*Routine
-	routineMap map[string]*Routine
-	mu         sync.RWMutex
-	content    *bigqueryv2.Dataset
-	repo       *Repository
-}
-
-func (d *Dataset) TableIDs() []string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	tableIDs := make([]string, 0, len(d.tables))
-	for _, table := range d.tables {
-		tableIDs = append(tableIDs, table.ID)
-	}
-	return tableIDs
-}
-
-func (d *Dataset) ModelIDs() []string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	modelIDs := make([]string, 0, len(d.models))
-	for _, model := range d.models {
-		modelIDs = append(modelIDs, model.ID)
-	}
-	return modelIDs
-}
-
-func (d *Dataset) RoutineIDs() []string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	routineIDs := make([]string, 0, len(d.routines))
-	for _, routine := range d.routines {
-		routineIDs = append(routineIDs, routine.ID)
-	}
-	return routineIDs
+	ID        string
+	ProjectID string
+	content   *bigqueryv2.Dataset
+	repo      *Repository
 }
 
 func (d *Dataset) Content() *bigqueryv2.Dataset {
@@ -108,119 +77,106 @@ func (d *Dataset) Delete(ctx context.Context, tx *sql.Tx) error {
 	return d.repo.DeleteDataset(ctx, tx, d)
 }
 
-func (d *Dataset) DeleteModel(ctx context.Context, tx *sql.Tx, id string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	model, exists := d.modelMap[id]
-	if !exists {
-		return fmt.Errorf("model '%s' is not found in dataset '%s'", id, d.ID)
-	}
-	if err := model.Delete(ctx, tx); err != nil {
-		return err
-	}
-	newModels := make([]*Model, 0, len(d.models))
-	for _, model := range d.models {
-		if model.ID == id {
-			continue
-		}
-		newModels = append(newModels, model)
-	}
-	d.models = newModels
-	delete(d.modelMap, id)
-	if err := d.repo.UpdateDataset(ctx, tx, d); err != nil {
-		return err
-	}
-	return nil
-}
-
+// AddTable inserts the table row keyed by (projectID, datasetID,
+// id) on the `tables` table. The parent `datasets` row is not
+// touched.
 func (d *Dataset) AddTable(ctx context.Context, tx *sql.Tx, table *Table) error {
-	d.mu.Lock()
-	if _, exists := d.tableMap[table.ID]; exists {
-		d.mu.Unlock()
+	if existing, err := d.repo.FindTableWithConn(ctx, tx, d.ProjectID, d.ID, table.ID); err != nil {
+		return err
+	} else if existing != nil {
 		return fmt.Errorf("table %s: %w", table.ID, ErrDuplicatedTable)
 	}
-	if err := table.Insert(ctx, tx); err != nil {
-		d.mu.Unlock()
+	return table.Insert(ctx, tx)
+}
+
+// DeleteTable mirrors AddTable: child-row delete only, no parent
+// row rewrite.
+func (d *Dataset) DeleteTable(ctx context.Context, tx *sql.Tx, id string) error {
+	table, err := d.repo.FindTableWithConn(ctx, tx, d.ProjectID, d.ID, id)
+	if err != nil {
 		return err
 	}
-	d.tables = append(d.tables, table)
-	d.tableMap[table.ID] = table
-	d.mu.Unlock()
+	if table == nil {
+		return fmt.Errorf("table '%s' is not found in dataset '%s'", id, d.ID)
+	}
+	return table.Delete(ctx, tx)
+}
 
-	if err := d.repo.UpdateDataset(ctx, tx, d); err != nil {
+func (d *Dataset) AddModel(ctx context.Context, tx *sql.Tx, model *Model) error {
+	return model.Insert(ctx, tx)
+}
+
+func (d *Dataset) DeleteModel(ctx context.Context, tx *sql.Tx, id string) error {
+	model, err := d.repo.FindModelWithConn(ctx, tx, d.ProjectID, d.ID, id)
+	if err != nil {
 		return err
 	}
-	return nil
+	if model == nil {
+		return fmt.Errorf("model '%s' is not found in dataset '%s'", id, d.ID)
+	}
+	return model.Delete(ctx, tx)
 }
 
-func (d *Dataset) Table(id string) *Table {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.tableMap[id]
+func (d *Dataset) AddRoutine(ctx context.Context, tx *sql.Tx, routine *Routine) error {
+	return d.repo.AddRoutine(ctx, tx, routine)
 }
 
-func (d *Dataset) Model(id string) *Model {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.modelMap[id]
+func (d *Dataset) DeleteRoutine(ctx context.Context, tx *sql.Tx, id string) error {
+	routine, err := d.repo.FindRoutineWithConn(ctx, tx, d.ProjectID, d.ID, id)
+	if err != nil {
+		return err
+	}
+	if routine == nil {
+		return fmt.Errorf("routine '%s' is not found in dataset '%s'", id, d.ID)
+	}
+	return d.repo.DeleteRoutine(ctx, tx, routine)
 }
 
-func (d *Dataset) Routine(id string) *Routine {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.routineMap[id]
+// Table resolves one table by primary-key seek on the `tables`
+// table — O(1) regardless of how many tables the dataset has.
+func (d *Dataset) Table(ctx context.Context, id string) (*Table, error) {
+	return d.repo.FindTable(ctx, d.ProjectID, d.ID, id)
 }
 
-func (d *Dataset) Tables() []*Table {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.tables
+func (d *Dataset) Model(ctx context.Context, id string) (*Model, error) {
+	return d.repo.FindModel(ctx, d.ProjectID, d.ID, id)
 }
 
-func (d *Dataset) Models() []*Model {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.models
+func (d *Dataset) Routine(ctx context.Context, id string) (*Routine, error) {
+	return d.repo.FindRoutine(ctx, d.ProjectID, d.ID, id)
 }
 
-func (d *Dataset) Routines() []*Routine {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.routines
+func (d *Dataset) Tables(ctx context.Context) ([]*Table, error) {
+	return d.repo.FindTablesByDataset(ctx, d.ProjectID, d.ID)
 }
 
+func (d *Dataset) Models(ctx context.Context) ([]*Model, error) {
+	return d.repo.FindModelsByDataset(ctx, d.ProjectID, d.ID)
+}
+
+func (d *Dataset) Routines(ctx context.Context) ([]*Routine, error) {
+	return d.repo.FindRoutinesByDataset(ctx, d.ProjectID, d.ID)
+}
+
+// NewDataset builds an in-memory Dataset identity. Tables / models
+// / routines are *not* retained on the struct; they are resolved
+// lazily through the repository. The variadic tail is accepted
+// for source compatibility with the old signature but ignored —
+// callers should write children through AddTable / AddModel /
+// AddRoutine which insert into the child tables directly.
 func NewDataset(
 	repo *Repository,
 	projectID string,
 	datasetID string,
 	content *bigqueryv2.Dataset,
-	tables []*Table,
-	models []*Model,
-	routines []*Routine) *Dataset {
-
-	tableMap := map[string]*Table{}
-	for _, table := range tables {
-		tableMap[table.ID] = table
-	}
-	modelMap := map[string]*Model{}
-	for _, model := range models {
-		modelMap[model.ID] = model
-	}
-	routineMap := map[string]*Routine{}
-	for _, routine := range routines {
-		routineMap[routine.ID] = routine
-	}
-
+	_ []*Table,
+	_ []*Model,
+	_ []*Routine,
+) *Dataset {
 	return &Dataset{
-		ID:         datasetID,
-		ProjectID:  projectID,
-		tables:     tables,
-		tableMap:   tableMap,
-		models:     models,
-		modelMap:   modelMap,
-		routines:   routines,
-		routineMap: routineMap,
-		content:    content,
-		repo:       repo,
+		ID:        datasetID,
+		ProjectID: projectID,
+		content:   content,
+		repo:      repo,
 	}
 }

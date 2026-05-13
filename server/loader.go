@@ -48,12 +48,14 @@ func (s *Server) addProject(ctx context.Context, project *types.Project) error {
 			return err
 		}
 	}
-	for _, dataset := range p.Datasets() {
-		if err := dataset.Insert(ctx, tx.Tx()); err != nil {
+	for _, dataset := range project.Datasets {
+		md := s.metaRepo.DatasetFromData(project.ID, dataset)
+		if err := s.metaRepo.AddDataset(ctx, tx.Tx(), md); err != nil {
 			return err
 		}
-		for _, table := range dataset.Tables() {
-			if err := table.Insert(ctx, tx.Tx()); err != nil {
+		for _, table := range dataset.Tables {
+			tm := s.metaRepo.TableFromData(project.ID, dataset.ID, table)
+			if err := s.metaRepo.AddTable(ctx, tx.Tx(), tm); err != nil {
 				return err
 			}
 		}
