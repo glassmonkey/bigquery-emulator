@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"time"
 
 	internaltypes "github.com/glassmonkey/bigquery-emulator/internal/types"
@@ -17,8 +16,6 @@ type Job struct {
 	content   *bigqueryv2.Job
 	response  *internaltypes.QueryResponse
 	err       error
-	completed bool
-	mu        sync.RWMutex
 	repo      *Repository
 }
 
@@ -43,10 +40,22 @@ func (j *Job) Content() *bigqueryv2.Job {
 	return j.content
 }
 
+// Wait blocks until the job's result row is visible in the
+// `jobs` table and returns the stored response. Reads-only on
+// the receiver, so it intentionally does not take j.mu — the
+// loop body only touches the repository.
+//
+// Fast path: jobsInsertHandler runs the query synchronously and
+// commits the result row before its HTTP response returns, so by
+// the time an SDK client starts polling `getQueryResults` the
+// row is almost always already there. The probe up front avoids
+// the 100 ms wasted on the first ticker tick (issue #94).
 func (j *Job) Wait(ctx context.Context) (*internaltypes.QueryResponse, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
+	if foundJob, err := j.repo.FindJob(ctx, j.ProjectID, j.ID); err != nil {
+		return nil, err
+	} else if foundJob != nil {
+		return foundJob.response, foundJob.err
+	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
