@@ -41,15 +41,26 @@ func (j *Job) Content() *bigqueryv2.Job {
 }
 
 // Wait blocks until the job's result row is visible in the
-// `jobs` table and returns the stored response. Reads-only on
-// the receiver, so it intentionally does not take j.mu — the
-// loop body only touches the repository.
+// `jobs` table and returns the stored response.
 //
 // Fast path: jobsInsertHandler runs the query synchronously and
 // commits the result row before its HTTP response returns, so by
 // the time an SDK client starts polling `getQueryResults` the
 // row is almost always already there. The probe up front avoids
 // the 100 ms wasted on the first ticker tick (issue #94).
+//
+// Goroutine-safety contract: this function reads `j.repo` only
+// and does not touch `j.response` / `j.err` (the returned values
+// come from a freshly-loaded `foundJob`). The receiver carries
+// no synchronisation, and the previous `j.mu` was structurally
+// unable to protect `j.response` / `j.err` anyway because
+// SetResult writes them without locking. Concurrent invocations
+// against the same *Job today only happen if the surrounding
+// HTTP layer permits it — and `sequentialAccessMiddleware` in
+// `server/middleware.go` currently serialises *all* requests
+// behind one mutex. If that middleware is ever relaxed, the
+// SetResult ↔ Wait race re-emerges and must be fixed at the
+// Job level, not by reintroducing a self-lock on Wait.
 func (j *Job) Wait(ctx context.Context) (*internaltypes.QueryResponse, error) {
 	if foundJob, err := j.repo.FindJob(ctx, j.ProjectID, j.ID); err != nil {
 		return nil, err
