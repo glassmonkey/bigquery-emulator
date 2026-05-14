@@ -246,6 +246,23 @@ UNION ALL
 			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64)])`,
 			expectedRows: [][]interface{}{{nil}},
 		},
+		// NOT IN UNNEST is resolved as $not($in_array(...)); the same
+		// ARRAY_IN fix must propagate NULL through the not-wrapper.
+		{
+			name:         "not in unnest with null element and match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "not in unnest with null element and no match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "not in unnest with only null element",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
 		{
 			name:         "is null operator",
 			query:        `SELECT NULL IS NULL`,
