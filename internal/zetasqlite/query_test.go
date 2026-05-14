@@ -174,6 +174,44 @@ UNION ALL
 			query:        "SELECT 100 <> 10",
 			expectedRows: [][]interface{}{{true}},
 		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/101
+		// BigQuery STRUCT equality with NULL fields must return NULL (not panic, not FALSE).
+		// Truth table per BQ docs: any non-NULL field differs → FALSE; else any NULL field → NULL; else TRUE.
+		{
+			name:         "struct eq both null fields equal non-null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) = STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq differing non-null field with null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) = STRUCT(2, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "struct eq one side fully populated other has null",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct ne both null fields equal non-null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) != STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct ne differing non-null field with null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) != STRUCT(2, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq all fields non-null and equal",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, 2)`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq all fields non-null and differ",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, 3)`,
+			expectedRows: [][]interface{}{{false}},
+		},
 		{
 			name:         "like operator",
 			query:        `SELECT "abcd" LIKE "a%d"`,

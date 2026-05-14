@@ -26,6 +26,11 @@ func OP_DIV(a, b Value) (Value, error) {
 }
 
 func EQ(a, b Value) (Value, error) {
+	if sva, ok := a.(*StructValue); ok {
+		if svb, ok := b.(*StructValue); ok {
+			return structEQ(sva, svb)
+		}
+	}
 	cond, err := a.EQ(b)
 	if err != nil {
 		return nil, err
@@ -34,11 +39,62 @@ func EQ(a, b Value) (Value, error) {
 }
 
 func NOT_EQ(a, b Value) (Value, error) {
-	cond, err := a.EQ(b)
+	res, err := EQ(a, b)
 	if err != nil {
 		return nil, err
 	}
-	return BoolValue(!cond), nil
+	if res == nil {
+		// Three-valued logic: NOT NULL = NULL.
+		return nil, nil
+	}
+	cond, ok := res.(BoolValue)
+	if !ok {
+		return nil, fmt.Errorf("NOT_EQ: unexpected non-bool result %T", res)
+	}
+	return BoolValue(!bool(cond)), nil
+}
+
+// structEQ implements BigQuery STRUCT equality with three-valued logic.
+//
+// Walking fields in declaration order:
+//   - if any pair of non-NULL fields differs, the result is FALSE
+//     regardless of other NULL fields;
+//   - otherwise, if any field on either side is NULL, the result is NULL;
+//   - otherwise, the result is TRUE.
+//
+// See https://cloud.google.com/bigquery/docs/reference/standard-sql/operators#comparison_operators
+func structEQ(a, b *StructValue) (Value, error) {
+	if len(a.keys) != len(b.keys) {
+		return BoolValue(false), nil
+	}
+	sawNull := false
+	for i := range a.keys {
+		av := a.values[i]
+		bv := b.values[i]
+		if av == nil || bv == nil {
+			sawNull = true
+			continue
+		}
+		cmp, err := EQ(av, bv)
+		if err != nil {
+			return nil, err
+		}
+		if cmp == nil {
+			sawNull = true
+			continue
+		}
+		eq, ok := cmp.(BoolValue)
+		if !ok {
+			return nil, fmt.Errorf("structEQ: unexpected non-bool result %T", cmp)
+		}
+		if !bool(eq) {
+			return BoolValue(false), nil
+		}
+	}
+	if sawNull {
+		return nil, nil
+	}
+	return BoolValue(true), nil
 }
 
 func GT(a, b Value) (Value, error) {

@@ -1256,16 +1256,31 @@ func (sv *StructValue) Div(v Value) (Value, error) {
 	return nil, fmt.Errorf("div operation is unsupported for struct %v", sv)
 }
 
+// EQ implements the Value interface. It returns true only when both structs
+// have all-non-NULL fields that compare equal. NULL fields make a definitive
+// "equal" answer impossible in BigQuery's three-valued logic; since this
+// bool-returning method cannot express SQL NULL, we conservatively return
+// false in that case. Callers that need the proper three-valued result
+// (e.g. the `=` / `!=` operators) go through the top-level EQ/NOT_EQ
+// functions, which special-case *StructValue.
 func (sv *StructValue) EQ(v Value) (bool, error) {
 	st, err := v.ToStruct()
 	if err != nil {
 		return false, err
 	}
-	if len(st.m) != len(sv.m) {
+	if len(sv.keys) != len(st.keys) {
 		return false, nil
 	}
-	for key := range sv.m {
-		cond, err := st.m[key].EQ(sv.m[key])
+	for i := range sv.keys {
+		a := sv.values[i]
+		b := st.values[i]
+		if a == nil || b == nil {
+			if a == nil && b == nil {
+				continue
+			}
+			return false, nil
+		}
+		cond, err := a.EQ(b)
 		if err != nil {
 			return false, err
 		}
