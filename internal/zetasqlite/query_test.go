@@ -125,12 +125,12 @@ UNION ALL
 		{
 			name:        "left shift operator with negative offset",
 			query:       "SELECT 1 << -1",
-			expectedErr: "Bit shift by negative offset is not allowed",
+			expectedErr: "Bitwise shift by negative offset.",
 		},
 		{
 			name:        "right shift operator with negative offset",
 			query:       "SELECT 8 >> -1",
-			expectedErr: "Bit shift by negative offset is not allowed",
+			expectedErr: "Bitwise shift by negative offset.",
 		},
 		// priority 6 operator
 		{
