@@ -47,11 +47,7 @@ func NOT_EQ(a, b Value) (Value, error) {
 		// Three-valued logic: NOT NULL = NULL.
 		return nil, nil
 	}
-	cond, ok := res.(BoolValue)
-	if !ok {
-		return nil, fmt.Errorf("NOT_EQ: unexpected non-bool result %T", res)
-	}
-	return BoolValue(!bool(cond)), nil
+	return BoolValue(!bool(res.(BoolValue))), nil
 }
 
 // structEQ implements BigQuery STRUCT equality with three-valued logic.
@@ -83,11 +79,7 @@ func structEQ(a, b *StructValue) (Value, error) {
 			sawNull = true
 			continue
 		}
-		eq, ok := cmp.(BoolValue)
-		if !ok {
-			return nil, fmt.Errorf("structEQ: unexpected non-bool result %T", cmp)
-		}
-		if !bool(eq) {
+		if !bool(cmp.(BoolValue)) {
 			return BoolValue(false), nil
 		}
 	}
