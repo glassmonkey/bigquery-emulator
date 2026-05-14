@@ -120,6 +120,18 @@ UNION ALL
 			query:        "SELECT 4 >> 1",
 			expectedRows: [][]interface{}{{int64(2)}},
 		},
+		// Regression test for https://github.com/glassmonkey/bigquery-emulator/issues/99
+		// Negative shift amounts panic in Go's <<,>> operators; BigQuery returns a query-level error.
+		{
+			name:        "left shift operator with negative offset",
+			query:       "SELECT 1 << -1",
+			expectedErr: "Bit shift by negative offset is not allowed",
+		},
+		{
+			name:        "right shift operator with negative offset",
+			query:       "SELECT 8 >> -1",
+			expectedErr: "Bit shift by negative offset is not allowed",
+		},
 		// priority 6 operator
 		{
 			name:         "bit and operator",

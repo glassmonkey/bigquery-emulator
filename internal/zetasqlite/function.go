@@ -90,6 +90,9 @@ func BIT_LEFT_SHIFT(a, b Value) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
+	if vb < 0 {
+		return nil, fmt.Errorf("Bit shift by negative offset is not allowed")
+	}
 	return IntValue(va << vb), nil
 }
 
@@ -101,6 +104,9 @@ func BIT_RIGHT_SHIFT(a, b Value) (Value, error) {
 	vb, err := b.ToInt64()
 	if err != nil {
 		return nil, err
+	}
+	if vb < 0 {
+		return nil, fmt.Errorf("Bit shift by negative offset is not allowed")
 	}
 	return IntValue(va >> vb), nil
 }
