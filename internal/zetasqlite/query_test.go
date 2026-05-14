@@ -226,6 +226,26 @@ UNION ALL
 			// When left-hand side is null, null is always returned
 			expectedRows: [][]interface{}{{true, nil, nil}},
 		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/100
+		// IN UNNEST against an array whose elements include SQL NULL used to
+		// nil-deref on val.EQ(a) inside ArrayValue.Has. The correct BigQuery
+		// semantics: TRUE if a non-NULL element matches; NULL if no non-NULL
+		// match but a NULL element is present; FALSE otherwise.
+		{
+			name:         "in unnest with null element and match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null element and no match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "in unnest with only null element",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
 		{
 			name:         "is null operator",
 			query:        `SELECT NULL IS NULL`,
