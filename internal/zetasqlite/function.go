@@ -91,6 +91,9 @@ func BIT_LEFT_SHIFT(a, b Value) (Value, error) {
 		return nil, err
 	}
 	if vb < 0 {
+		// Wording matches the real BigQuery error verbatim; keep aligned so callers
+		// that switch on the BQ error string stay transparent. BIT_RIGHT_SHIFT below
+		// shares the same invariant.
 		return nil, fmt.Errorf("Bitwise shift by negative offset.")
 	}
 	return IntValue(va << vb), nil
