@@ -56,9 +56,12 @@ func Test_Function_BIT_LEFT_SHIFT(t *testing.T) {
 	t.Run("negative offset returns BigQuery-aligned error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := BIT_LEFT_SHIFT(IntValue(1), IntValue(-1))
+		got, err := BIT_LEFT_SHIFT(IntValue(1), IntValue(-1))
 		if err == nil {
 			t.Fatal("expected error for negative offset")
+		}
+		if got != nil {
+			t.Fatalf("expected nil value on error, got: %v", got)
 		}
 		// Wording must stay byte-aligned with real BigQuery.
 		if err.Error() != "Bitwise shift by negative offset." {
@@ -121,9 +124,12 @@ func Test_Function_BIT_RIGHT_SHIFT(t *testing.T) {
 	t.Run("negative offset returns BigQuery-aligned error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := BIT_RIGHT_SHIFT(IntValue(8), IntValue(-1))
+		got, err := BIT_RIGHT_SHIFT(IntValue(8), IntValue(-1))
 		if err == nil {
 			t.Fatal("expected error for negative offset")
+		}
+		if got != nil {
+			t.Fatalf("expected nil value on error, got: %v", got)
 		}
 		// Wording must stay byte-aligned with real BigQuery.
 		if err.Error() != "Bitwise shift by negative offset." {
