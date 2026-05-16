@@ -259,6 +259,29 @@ UNION ALL
 			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64)])`,
 			expectedRows: [][]interface{}{{nil}},
 		},
+		// Pin the NULL-element skip path across representative groupable
+		// types (STRING, BOOL, FLOAT64, DATE). STRUCT is intentionally
+		// covered by issue #101's regression suite, not here.
+		{
+			name:         "in unnest with null string element",
+			query:        `SELECT 'a' IN UNNEST([CAST(NULL AS STRING), 'a'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null bool element",
+			query:        `SELECT true IN UNNEST([CAST(NULL AS BOOL), true])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null float element",
+			query:        `SELECT 1.5 IN UNNEST([CAST(NULL AS FLOAT64), 1.5])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null date element",
+			query:        `SELECT DATE '2024-01-01' IN UNNEST([CAST(NULL AS DATE), DATE '2024-01-01'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
 		// NOT IN UNNEST is resolved as $not($in_array(...)); the same
 		// ARRAY_IN fix must propagate NULL through the not-wrapper.
 		{
