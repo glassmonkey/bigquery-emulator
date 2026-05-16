@@ -228,6 +228,31 @@ UNION ALL
 			expectedRows: [][]interface{}{{false}},
 		},
 		{
+			name:         "struct eq with BOOL fields, NULL field present -> NULL",
+			query:        `SELECT STRUCT(true, CAST(NULL AS BOOL)) = STRUCT(true, CAST(NULL AS BOOL))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq with TIMESTAMP fields, non-NULL field differs -> FALSE",
+			query:        `SELECT STRUCT(TIMESTAMP '2024-01-01 00:00:00 UTC', TIMESTAMP '2025-01-01 00:00:00 UTC') = STRUCT(TIMESTAMP '2024-01-01 00:00:00 UTC', TIMESTAMP '2026-01-01 00:00:00 UTC')`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "struct eq with NUMERIC fields, all non-NULL and equal -> TRUE",
+			query:        `SELECT STRUCT(NUMERIC '1.5', NUMERIC '2.5') = STRUCT(NUMERIC '1.5', NUMERIC '2.5')`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq with BYTES fields, NULL field present -> NULL",
+			query:        `SELECT STRUCT(b"abc", CAST(NULL AS BYTES)) = STRUCT(b"abc", CAST(NULL AS BYTES))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq with DATE fields, all non-NULL and equal -> TRUE",
+			query:        `SELECT STRUCT(DATE '2024-01-01', DATE '2024-02-01') = STRUCT(DATE '2024-01-01', DATE '2024-02-01')`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
 			name:         "like operator",
 			query:        `SELECT "abcd" LIKE "a%d"`,
 			expectedRows: [][]interface{}{{true}},
