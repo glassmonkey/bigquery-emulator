@@ -226,6 +226,19 @@ UNION ALL
 			// When left-hand side is null, null is always returned
 			expectedRows: [][]interface{}{{true, nil, nil}},
 		},
+		// IN UNNEST baseline: array without NULL elements. Pinned alongside
+		// the NULL-element cases below so the 2x2 (NULL × match) table is
+		// fully documented.
+		{
+			name:         "in unnest classic match",
+			query:        `SELECT 1 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest classic no match",
+			query:        `SELECT 9 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{false}},
+		},
 		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/100
 		// IN UNNEST against an array whose elements include SQL NULL used to
 		// nil-deref on val.EQ(a) inside ArrayValue.Has. The correct BigQuery
