@@ -111,7 +111,11 @@ func BIT_RIGHT_SHIFT(a, b Value) (Value, error) {
 	if vb < 0 {
 		return nil, fmt.Errorf("Bitwise shift by negative offset.")
 	}
-	return IntValue(va >> vb), nil
+	// BigQuery's `>>` is a *logical* (unsigned) right shift — the upper bits
+	// are zero-filled regardless of sign. Go's int64 `>>` is arithmetic
+	// (signed) and sign-extends, so the negative-base result diverges from
+	// BigQuery. Reinterpret as uint64 to match BigQuery semantics.
+	return IntValue(int64(uint64(va) >> vb)), nil
 }
 
 func BIT_AND(a, b Value) (Value, error) {
