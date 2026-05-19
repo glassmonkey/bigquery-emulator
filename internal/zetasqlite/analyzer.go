@@ -83,6 +83,7 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 		zetasql.FeatureV13NullsFirstLastInOrderBy,
 		zetasql.FeatureV13Qualify,
 		zetasql.FeatureV13AllowDashesInTableName,
+		zetasql.FeatureV13ConcatMixedTypes,
 		zetasql.FeatureGeography,
 		zetasql.FeatureV13ExtendedGeographyParsers,
 		zetasql.FeatureTemplateFunctions,

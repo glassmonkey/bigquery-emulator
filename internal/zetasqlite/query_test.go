@@ -92,6 +92,27 @@ UNION ALL
 			query:        `SELECT "a" || "b"`,
 			expectedRows: [][]interface{}{{"ab"}},
 		},
+		// Regression test for https://github.com/glassmonkey/bigquery-emulator/issues/98
+		{
+			name:         "concat string operator with int64 rhs",
+			query:        `SELECT "abc" || 123`,
+			expectedRows: [][]interface{}{{"abc123"}},
+		},
+		{
+			name:         "concat string operator with int64 lhs",
+			query:        `SELECT 123 || "abc"`,
+			expectedRows: [][]interface{}{{"123abc"}},
+		},
+		{
+			name:         "concat string operator with float64",
+			query:        `SELECT "abc" || 1.5`,
+			expectedRows: [][]interface{}{{"abc1.5"}},
+		},
+		{
+			name:         "concat string operator with date",
+			query:        `SELECT "abc" || DATE "2026-01-01"`,
+			expectedRows: [][]interface{}{{"abc2026-01-01"}},
+		},
 		{
 			name:         "concat array operator",
 			query:        `SELECT [1, 2] || [3, 4]`,
