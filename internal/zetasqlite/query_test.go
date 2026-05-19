@@ -132,6 +132,25 @@ UNION ALL
 			query:       "SELECT 8 >> -1",
 			expectedErr: "Bitwise shift by negative offset.",
 		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/113
+		// BigQuery's `>>` is a *logical* (unsigned) right shift — it zero-fills the
+		// upper bits regardless of sign. Go's `>>` on int64 is arithmetic (signed).
+		// Expected values are byte-verified against real BigQuery.
+		{
+			name:         "right shift operator with negative base (small)",
+			query:        "SELECT -8 >> 2",
+			expectedRows: [][]interface{}{{int64(4611686018427387902)}},
+		},
+		{
+			name:         "right shift operator with negative base (-1 fills with zeros)",
+			query:        "SELECT CAST(-1 AS INT64) >> 1",
+			expectedRows: [][]interface{}{{int64(9223372036854775807)}},
+		},
+		{
+			name:         "right shift operator on INT64 min",
+			query:        "SELECT -9223372036854775808 >> 1",
+			expectedRows: [][]interface{}{{int64(4611686018427387904)}},
+		},
 		// priority 6 operator
 		{
 			name:         "bit and operator",
