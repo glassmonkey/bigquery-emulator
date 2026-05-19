@@ -146,11 +146,29 @@ func ARRAY_IN(a, b Value) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	cond, err := array.Has(a)
-	if err != nil {
-		return nil, err
+	// BigQuery semantics for `x IN UNNEST(array)`:
+	//   - TRUE  if a non-NULL element equals x
+	//   - NULL  if no non-NULL match, but a NULL element is in the array
+	//   - FALSE otherwise
+	// A nil element here represents SQL NULL; skip equality and remember it.
+	hasNull := false
+	for _, val := range array.values {
+		if val == nil {
+			hasNull = true
+			continue
+		}
+		cond, err := val.EQ(a)
+		if err != nil {
+			return nil, err
+		}
+		if cond {
+			return BoolValue(true), nil
+		}
 	}
-	return BoolValue(cond), nil
+	if hasNull {
+		return nil, nil
+	}
+	return BoolValue(false), nil
 }
 
 func STRUCT_FIELD(v Value, idx int) (Value, error) {

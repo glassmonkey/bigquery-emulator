@@ -226,6 +226,79 @@ UNION ALL
 			// When left-hand side is null, null is always returned
 			expectedRows: [][]interface{}{{true, nil, nil}},
 		},
+		// IN UNNEST baseline: array without NULL elements. Pinned alongside
+		// the NULL-element cases below so the 2x2 (NULL × match) table is
+		// fully documented.
+		{
+			name:         "in unnest classic match",
+			query:        `SELECT 1 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest classic no match",
+			query:        `SELECT 9 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/100
+		// IN UNNEST against an array whose elements include SQL NULL used to
+		// nil-deref on val.EQ(a) inside ArrayValue.Has. The correct BigQuery
+		// semantics: TRUE if a non-NULL element matches; NULL if no non-NULL
+		// match but a NULL element is present; FALSE otherwise.
+		{
+			name:         "in unnest with null element and match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null element and no match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "in unnest with only null element",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		// Pin the NULL-element skip path across representative groupable
+		// types (STRING, BOOL, FLOAT64, DATE). STRUCT is intentionally
+		// covered by issue #101's regression suite, not here.
+		{
+			name:         "in unnest with null string element",
+			query:        `SELECT 'a' IN UNNEST([CAST(NULL AS STRING), 'a'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null bool element",
+			query:        `SELECT true IN UNNEST([CAST(NULL AS BOOL), true])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null float element",
+			query:        `SELECT 1.5 IN UNNEST([CAST(NULL AS FLOAT64), 1.5])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null date element",
+			query:        `SELECT DATE '2024-01-01' IN UNNEST([CAST(NULL AS DATE), DATE '2024-01-01'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		// NOT IN UNNEST is resolved as $not($in_array(...)); the same
+		// ARRAY_IN fix must propagate NULL through the not-wrapper.
+		{
+			name:         "not in unnest with null element and match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "not in unnest with null element and no match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "not in unnest with only null element",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
 		{
 			name:         "is null operator",
 			query:        `SELECT NULL IS NULL`,
