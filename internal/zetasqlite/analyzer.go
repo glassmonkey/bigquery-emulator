@@ -281,21 +281,7 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 			// parsed reverse lookup (NodeMap.FindParsedNodes) only works
 			// when both sides come from the same Analyze call.
 			ctx = a.context(ctx, funcMap, stmtNode, out.Parsed)
-			// CREATE SCHEMA needs the parsed AST for OPTIONS
-			// decoding — CreateSchemaStmtNode.OptionList() returns
-			// raw proto rather than the wrapped *OptionNode the rest
-			// of the emulator uses, so we read OPTIONS from the
-			// parsed-side OptionsListNode (StringValue, Image, etc).
-			// Handle it inline rather than threading the parsed AST
-			// through newStmtAction.
-			if stmtNode.Kind() == ast.KindCreateSchemaStmt {
-				return a.newCreateSchemaStmtAction(
-					ps.SQL,
-					stmtNode.(*ast.CreateSchemaStmtNode),
-					out.Parsed,
-				)
-			}
-			action, err := a.newStmtAction(ctx, ps.SQL, args, stmtNode)
+			action, err := a.newStmtAction(ctx, ps.SQL, args, stmtNode, out.Parsed)
 			if err != nil {
 				return nil, err
 			}
@@ -393,7 +379,14 @@ func (a *Analyzer) analyzeTemplatedFunctionWithRuntimeArgument(ctx context.Conte
 	return spec, nil
 }
 
-func (a *Analyzer) newStmtAction(ctx context.Context, query string, args []driver.NamedValue, node ast.StatementNode) (StmtAction, error) {
+// newStmtAction dispatches a resolved statement to its action
+// constructor. `parsedRoot` carries the parsed-AST sibling of `node`;
+// most statements ignore it, but CREATE SCHEMA needs it because the
+// resolved-AST `CreateSchemaStmtNode.OptionList()` exposes OPTIONS
+// only as raw proto — values are decoded from the parsed side
+// (typed literal nodes) instead. Threading parsedRoot through here
+// keeps the dispatch table in one place.
+func (a *Analyzer) newStmtAction(ctx context.Context, query string, args []driver.NamedValue, node ast.StatementNode, parsedRoot parsed_ast.StatementNode) (StmtAction, error) {
 	switch node.Kind() {
 	case ast.KindCreateTableStmt:
 		return a.newCreateTableStmtAction(ctx, query, args, node.(*ast.CreateTableStmtNode))
@@ -405,6 +398,8 @@ func (a *Analyzer) newStmtAction(ctx context.Context, query string, args []drive
 	case ast.KindCreateViewStmt:
 		ctx = withUseColumnID(ctx)
 		return a.newCreateViewStmtAction(ctx, query, args, node.(*ast.CreateViewStmtNode))
+	case ast.KindCreateSchemaStmt:
+		return a.newCreateSchemaStmtAction(ctx, query, node.(*ast.CreateSchemaStmtNode), parsedRoot)
 	case ast.KindDropStmt:
 		return a.newDropStmtAction(ctx, query, args, node.(*ast.DropStmtNode))
 	case ast.KindDropFunctionStmt:
@@ -646,17 +641,17 @@ func (a *Analyzer) newDropFunctionStmtAction(ctx context.Context, query string, 
 // exposes OPTIONS only as raw proto, so OPTIONS values are read from
 // the parsed-AST sibling node where each literal is wrapped in a
 // typed parsed_ast.* node we can decode.
-func (a *Analyzer) newCreateSchemaStmtAction(query string, node *ast.CreateSchemaStmtNode, parsedRoot parsed_ast.StatementNode) (*CreateSchemaStmtAction, error) {
+func (a *Analyzer) newCreateSchemaStmtAction(_ context.Context, query string, node *ast.CreateSchemaStmtNode, parsedRoot parsed_ast.StatementNode) (*CreateSchemaStmtAction, error) {
 	spec := &DatasetSpec{
 		NamePath:   node.NamePath(),
 		CreateMode: node.CreateMode(),
 	}
 	if parsedSchema, ok := parsedRoot.(*parsed_ast.CreateSchemaStatementNode); ok {
-		known, unknown, err := decodeCreateSchemaOptions(parsedSchema.OptionsList())
+		options, unknown, err := decodeCreateSchemaOptions(parsedSchema.OptionsList())
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode CREATE SCHEMA OPTIONS: %w", err)
 		}
-		spec.KnownOptions = known
+		spec.Options = options
 		spec.UnknownOptions = unknown
 	}
 	return &CreateSchemaStmtAction{query: query, spec: spec}, nil

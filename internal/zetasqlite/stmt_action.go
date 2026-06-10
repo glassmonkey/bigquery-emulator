@@ -571,7 +571,7 @@ func (a *CreateSchemaStmtAction) exec(ctx context.Context, conn *Conn) error {
 	// server replays drop-then-add in metaRepo. The IF NOT EXISTS
 	// idempotence is handled server-side, since "already exists"
 	// is a metaRepo concept the SQL engine cannot answer alone.
-	if a.spec.CreateMode == ast.CreateOrReplaceMode {
+	if a.spec.IsOrReplace() {
 		conn.deleteDataset(a.spec)
 	}
 	conn.addDataset(a.spec)

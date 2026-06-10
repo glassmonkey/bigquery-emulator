@@ -172,14 +172,14 @@ CREATE TABLE IF NOT EXISTS Singers (
 		if diff := cmp.Diff([]string{"newds"}, added.NamePath); diff != "" {
 			t.Errorf("NamePath (-want +got):\n%s", diff)
 		}
-		if got := added.KnownOptions["description"]; got != "for dbt" {
-			t.Errorf("description: want %q, got %v", "for dbt", got)
+		if added.Options.Description != "for dbt" {
+			t.Errorf("Description: want %q, got %q", "for dbt", added.Options.Description)
 		}
-		if got := added.KnownOptions["labels"]; !cmp.Equal(got, map[string]string{"env": "dev"}) {
-			t.Errorf("labels: want %v, got %v", map[string]string{"env": "dev"}, got)
+		if diff := cmp.Diff(map[string]string{"env": "dev"}, added.Options.Labels); diff != "" {
+			t.Errorf("Labels (-want +got):\n%s", diff)
 		}
-		if got := added.KnownOptions["default_table_expiration_days"]; got != int64(7) {
-			t.Errorf("default_table_expiration_days: want %d, got %v", int64(7), got)
+		if added.Options.DefaultTableExpirationDays != 7 {
+			t.Errorf("DefaultTableExpirationDays: want %d, got %d", 7, added.Options.DefaultTableExpirationDays)
 		}
 
 		rows, err := db.QueryContext(context.Background(), `DROP SCHEMA newds`)
@@ -223,8 +223,8 @@ CREATE TABLE IF NOT EXISTS Singers (
 			t.Fatal(err)
 		}
 		added := resultCatalog.Dataset.Added[0]
-		if got := added.KnownOptions["description"]; got != "ok" {
-			t.Errorf("description: want %q, got %v", "ok", got)
+		if added.Options.Description != "ok" {
+			t.Errorf("Description: want %q, got %q", "ok", added.Options.Description)
 		}
 		if diff := cmp.Diff([]string{"default_kms_key_name"}, added.UnknownOptions); diff != "" {
 			t.Errorf("UnknownOptions (-want +got):\n%s", diff)

@@ -1543,7 +1543,7 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 			return nil, fmt.Errorf("failed to commit job: %w", err)
 		}
 		if response != nil && response.ChangedCatalog.Changed() {
-			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
+			if err := syncCatalog(ctx, r.server, response.ChangedCatalog, r.project.ID); err != nil {
 				return nil, err
 			}
 		}
@@ -1552,13 +1552,18 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 	return job, nil
 }
 
-func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCatalog) error {
+// syncCatalog reflects the SQL engine's ChangedCatalog into the
+// metaRepo. defaultProjectID is the project the request landed on;
+// it is used as the target project for bare `CREATE SCHEMA newds` /
+// `DROP SCHEMA newds` (i.e. SQL without an explicit project
+// qualifier).
+func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCatalog, defaultProjectID string) error {
 	// Datasets first: a CREATE SCHEMA followed by CREATE TABLE in
 	// the same script needs the dataset to exist before the table
 	// addTableMetadata runs (it calls project.Dataset(datasetID)
 	// which returns nil otherwise).
 	for _, dataset := range cat.Dataset.Added {
-		if err := addDatasetMetadata(ctx, server, dataset); err != nil {
+		if err := addDatasetMetadata(ctx, server, dataset, defaultProjectID); err != nil {
 			return err
 		}
 	}
@@ -1575,7 +1580,7 @@ func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCat
 	// Datasets last on the delete side: a DROP TABLE followed by
 	// DROP SCHEMA needs the table-row delete to complete first.
 	for _, dataset := range cat.Dataset.Deleted {
-		if err := deleteDatasetMetadata(ctx, server, dataset); err != nil {
+		if err := deleteDatasetMetadata(ctx, server, dataset, defaultProjectID); err != nil {
 			return err
 		}
 	}
@@ -1583,14 +1588,14 @@ func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCat
 }
 
 // addDatasetMetadata reflects a CREATE SCHEMA into the metaRepo. The
-// dataset's project is resolved from spec.NamePath when the SQL is
-// project-qualified (`p.newds`), otherwise from the connection's
-// default project. OPTIONS the emulator persists are written onto the
-// bigqueryv2.Dataset content so REST GET reads them back; OPTIONS
-// outside that set are emitted as WARN logs so the user can see
-// silent-ignore boundaries rather than guess them.
-func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec) error {
-	projectID, datasetID, err := resolveDatasetIdentity(ctx, server, spec)
+// project the dataset lives in is taken from the SQL when it is
+// project-qualified (`p.newds`), otherwise from defaultProjectID
+// (the project the request landed on). OPTIONS the emulator
+// persists are written onto the bigqueryv2.Dataset content so REST
+// GET reads them back; OPTIONS outside that set are warn-logged so
+// the user can see silent-ignore boundaries rather than guess them.
+func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec, defaultProjectID string) error {
+	projectID, datasetID, err := resolveDatasetIdentity(spec, defaultProjectID)
 	if err != nil {
 		return err
 	}
@@ -1609,7 +1614,6 @@ func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.Da
 			return nil
 		}
 	}
-	content := datasetContentFromOptions(spec)
 	for _, name := range spec.UnknownOptions {
 		logger.Logger(ctx).Warn(
 			"CREATE SCHEMA OPTIONS accepted but not persisted by the emulator",
@@ -1634,7 +1638,7 @@ func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.Da
 			server.metaRepo,
 			project.ID,
 			datasetID,
-			content,
+			datasetContentFromOptions(spec.Options),
 			nil,
 			nil,
 			nil,
@@ -1649,8 +1653,8 @@ func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.Da
 // DROP SCHEMA IF EXISTS treats "dataset not found" as a no-op rather
 // than an error; the emulator does not yet enforce CASCADE / RESTRICT
 // semantics on contained tables — that is tracked separately.
-func deleteDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec) error {
-	projectID, datasetID, err := resolveDatasetIdentity(ctx, server, spec)
+func deleteDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec, defaultProjectID string) error {
+	projectID, datasetID, err := resolveDatasetIdentity(spec, defaultProjectID)
 	if err != nil {
 		return err
 	}
@@ -1681,95 +1685,49 @@ func deleteDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite
 
 // resolveDatasetIdentity picks (projectID, datasetID) out of a
 // DatasetSpec. A project-qualified NamePath like `[p, newds]` wins
-// over the default project (the SQL says where to put the dataset).
-// A bare `[newds]` falls back to the only project the metaRepo knows
-// about — there is no "current project" context yet, so we error if
-// multiple projects exist and the SQL did not qualify.
-func resolveDatasetIdentity(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec) (string, string, error) {
+// over defaultProjectID (the SQL says where to put the dataset); a
+// bare `[newds]` falls back to defaultProjectID.
+func resolveDatasetIdentity(spec *zetasqlite.DatasetSpec, defaultProjectID string) (string, string, error) {
 	switch len(spec.NamePath) {
 	case 0:
 		return "", "", fmt.Errorf("CREATE/DROP SCHEMA has empty NamePath")
 	case 1:
-		projects, err := server.metaRepo.FindAllProjects(ctx)
-		if err != nil {
-			return "", "", err
-		}
-		if len(projects) != 1 {
+		if defaultProjectID == "" {
 			return "", "", fmt.Errorf(
-				"bare SCHEMA name %q is ambiguous: %d projects in metaRepo (qualify with project.dataset)",
-				spec.NamePath[0], len(projects),
+				"bare SCHEMA name %q requires a default project on the request (qualify with project.dataset)",
+				spec.NamePath[0],
 			)
 		}
-		return projects[0].ID, spec.NamePath[0], nil
+		return defaultProjectID, spec.NamePath[0], nil
 	default:
-		// `[p, newds]` or longer (BigQuery doesn't have nested
-		// schemas, so >2 is rejected by ZetaSQL upstream — we take
-		// last as dataset, second-to-last as project).
+		// `[p, newds]` or longer. BigQuery does not have nested
+		// schemas, so >2 is rejected upstream by ZetaSQL; take the
+		// last element as the dataset and the second-to-last as
+		// the project.
 		return spec.NamePath[len(spec.NamePath)-2], spec.NamePath[len(spec.NamePath)-1], nil
 	}
 }
 
-// datasetContentFromOptions translates DatasetSpec.KnownOptions into
-// the corresponding fields on bigqueryv2.Dataset. Unit conversions
+// datasetContentFromOptions translates DatasetOptions into the
+// corresponding fields on bigqueryv2.Dataset. Unit conversions
 // (days → ms for expirations) live here so callers don't have to
-// duplicate them. Options the emulator does not persist (silently
-// ignored on REST round-trip) are NOT in this map — they belong in
-// DatasetSpec.UnknownOptions and are warn-logged before this is
-// called.
-func datasetContentFromOptions(spec *zetasqlite.DatasetSpec) *bigqueryv2.Dataset {
-	d := &bigqueryv2.Dataset{}
-	for name, value := range spec.KnownOptions {
-		switch name {
-		case "description":
-			if v, ok := value.(string); ok {
-				d.Description = v
-			}
-		case "friendly_name":
-			if v, ok := value.(string); ok {
-				d.FriendlyName = v
-			}
-		case "location":
-			if v, ok := value.(string); ok {
-				d.Location = v
-			}
-		case "storage_billing_model":
-			if v, ok := value.(string); ok {
-				d.StorageBillingModel = v
-			}
-		case "default_collation":
-			if v, ok := value.(string); ok {
-				d.DefaultCollation = v
-			}
-		case "default_rounding_mode":
-			if v, ok := value.(string); ok {
-				d.DefaultRoundingMode = v
-			}
-		case "labels":
-			if v, ok := value.(map[string]string); ok {
-				d.Labels = v
-			}
-		case "default_table_expiration_days":
-			if v, ok := value.(int64); ok {
-				d.DefaultTableExpirationMs = v * 86_400_000
-			}
-		case "default_partition_expiration_days":
-			if v, ok := value.(int64); ok {
-				d.DefaultPartitionExpirationMs = v * 86_400_000
-			}
-		case "max_time_travel_hours":
-			switch v := value.(type) {
-			case int64:
-				d.MaxTimeTravelHours = v
-			case float64:
-				d.MaxTimeTravelHours = int64(v)
-			}
-		case "is_case_insensitive":
-			if v, ok := value.(bool); ok {
-				d.IsCaseInsensitive = v
-			}
-		}
+// duplicate them. The case list mirrors decodeCreateSchemaOptions
+// in internal/zetasqlite/dataset_options.go — if you add a new
+// option, update both.
+func datasetContentFromOptions(opts zetasqlite.DatasetOptions) *bigqueryv2.Dataset {
+	return &bigqueryv2.Dataset{
+		Description:                  opts.Description,
+		FriendlyName:                 opts.FriendlyName,
+		Location:                     opts.Location,
+		StorageBillingModel:          opts.StorageBillingModel,
+		DefaultCollation:             opts.DefaultCollation,
+		DefaultRoundingMode:          opts.DefaultRoundingMode,
+		Labels:                       opts.Labels,
+		DefaultTableExpirationMs:     opts.DefaultTableExpirationDays * 86_400_000,
+		DefaultPartitionExpirationMs: opts.DefaultPartitionExpirationDays * 86_400_000,
+		MaxTimeTravelHours:           int64(opts.MaxTimeTravelHours),
+		IsCaseInsensitive:            opts.IsCaseInsensitive,
 	}
-	return d
 }
 
 func addTableMetadata(ctx context.Context, server *Server, spec *zetasqlite.TableSpec) error {
@@ -2021,7 +1979,7 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (res
 			return nil, err
 		}
 		if response.ChangedCatalog.Changed() {
-			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
+			if err := syncCatalog(ctx, r.server, response.ChangedCatalog, r.project.ID); err != nil {
 				return nil, err
 			}
 		}
