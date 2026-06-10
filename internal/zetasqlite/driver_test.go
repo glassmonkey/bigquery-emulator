@@ -172,14 +172,13 @@ CREATE TABLE IF NOT EXISTS Singers (
 		if diff := cmp.Diff([]string{"newds"}, added.NamePath); diff != "" {
 			t.Errorf("NamePath (-want +got):\n%s", diff)
 		}
-		if added.Options.Description != "for dbt" {
-			t.Errorf("Description: want %q, got %q", "for dbt", added.Options.Description)
+		wantOpts := DatasetOptions{
+			Description:                "for dbt",
+			Labels:                     map[string]string{"env": "dev"},
+			DefaultTableExpirationDays: 7,
 		}
-		if diff := cmp.Diff(map[string]string{"env": "dev"}, added.Options.Labels); diff != "" {
-			t.Errorf("Labels (-want +got):\n%s", diff)
-		}
-		if added.Options.DefaultTableExpirationDays != 7 {
-			t.Errorf("DefaultTableExpirationDays: want %d, got %d", 7, added.Options.DefaultTableExpirationDays)
+		if diff := cmp.Diff(wantOpts, added.Options); diff != "" {
+			t.Errorf("Options (-want +got):\n%s", diff)
 		}
 
 		rows, err := db.QueryContext(context.Background(), `DROP SCHEMA newds`)
@@ -223,8 +222,9 @@ CREATE TABLE IF NOT EXISTS Singers (
 			t.Fatal(err)
 		}
 		added := resultCatalog.Dataset.Added[0]
-		if added.Options.Description != "ok" {
-			t.Errorf("Description: want %q, got %q", "ok", added.Options.Description)
+		wantOpts := DatasetOptions{Description: "ok"}
+		if diff := cmp.Diff(wantOpts, added.Options); diff != "" {
+			t.Errorf("Options (-want +got):\n%s", diff)
 		}
 		if diff := cmp.Diff([]string{"default_kms_key_name"}, added.UnknownOptions); diff != "" {
 			t.Errorf("UnknownOptions (-want +got):\n%s", diff)

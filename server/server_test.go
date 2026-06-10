@@ -781,94 +781,108 @@ func TestCreateSchemaDDL(t *testing.T) {
 	// EXISTS) must succeed against the emulator and the dataset must
 	// be visible through the REST list/get path. Without this, dbt
 	// build cannot run against the emulator unmodified.
-	const (
-		projectID = "test"
-		datasetID = "newds"
-	)
-
+	const projectID = "test"
 	ctx := context.Background()
+
+	t.Run("CREATE SCHEMA creates a new dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("CREATE SCHEMA `test`.`newds`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !datasetVisible(t, ctx, client, "newds") {
+			t.Fatal("dataset not visible after CREATE SCHEMA")
+		}
+	})
+
+	t.Run("CREATE SCHEMA IF NOT EXISTS creates a new dataset (issue #121 literal repro)", func(t *testing.T) {
+		// Exact wording from the issue body. The bug was a hard
+		// reject ("Statement not supported: CreateSchemaStatement")
+		// before the dataset ever got a chance to be created, so
+		// this subtest pins the success-on-absent path that dbt's
+		// `create_schema` macro relies on.
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("CREATE SCHEMA IF NOT EXISTS `test`.`newds`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !datasetVisible(t, ctx, client, "newds") {
+			t.Fatal("dataset not visible after CREATE SCHEMA IF NOT EXISTS")
+		}
+	})
+
+	t.Run("CREATE SCHEMA IF NOT EXISTS is idempotent on existing dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID, "existing")
+		if _, err := client.Query("CREATE SCHEMA IF NOT EXISTS `test`.`existing`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("DROP SCHEMA removes a dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID, "doomed")
+		if _, err := client.Query("DROP SCHEMA `test`.`doomed`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if datasetVisible(t, ctx, client, "doomed") {
+			t.Fatal("dataset still visible after DROP SCHEMA")
+		}
+	})
+
+	t.Run("DROP SCHEMA IF EXISTS is no-op on absent dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("DROP SCHEMA IF EXISTS `test`.`absent`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// newSchemaTestClient builds a fresh emulator + bigquery client per
+// subtest, optionally pre-loading datasets so each subtest can start
+// from its own initial state without depending on sibling order.
+// Cleanup is registered with t.Cleanup so each subtest fully tears
+// down on return.
+func newSchemaTestClient(t *testing.T, ctx context.Context, projectID string, datasetIDs ...string) *bigquery.Client {
+	t.Helper()
+	datasets := make([]*types.Dataset, 0, len(datasetIDs))
+	for _, id := range datasetIDs {
+		datasets = append(datasets, types.NewDataset(id))
+	}
 	bqServer, err := server.New(server.TempStorage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Project without any pre-created dataset — CREATE SCHEMA is the
-	// only path that produces one in this test.
-	if err := bqServer.Load(server.StructSource(types.NewProject(projectID))); err != nil {
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID, datasets...))); err != nil {
 		t.Fatal(err)
 	}
-	testServer := bqServer.TestServer()
-	defer func() {
-		testServer.Close()
+	ts := bqServer.TestServer()
+	t.Cleanup(func() {
+		ts.Close()
 		bqServer.Stop(ctx)
-	}()
-
-	client, err := bigquery.NewClient(
-		ctx,
-		projectID,
-		option.WithEndpoint(testServer.URL),
-		option.WithoutAuthentication(),
-	)
+	})
+	client, err := bigquery.NewClient(ctx, projectID,
+		option.WithEndpoint(ts.URL), option.WithoutAuthentication())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	t.Cleanup(func() { client.Close() })
+	return client
+}
 
-	if _, err := client.Query(
-		fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS `%s`.`%s`", projectID, datasetID),
-	).Run(ctx); err != nil {
-		t.Fatalf("CREATE SCHEMA: %v", err)
-	}
-
-	dsIter := client.Datasets(ctx)
-	var found bool
+// datasetVisible scans client.Datasets for id. Trivial loop with no
+// branching beyond the iterator's done signal — kept that way so the
+// helper itself does not need its own test (R9).
+func datasetVisible(t *testing.T, ctx context.Context, c *bigquery.Client, id string) bool {
+	t.Helper()
+	it := c.Datasets(ctx)
 	for {
-		ds, err := dsIter.Next()
+		ds, err := it.Next()
 		if err == iterator.Done {
-			break
+			return false
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ds.DatasetID == datasetID {
-			found = true
+		if ds.DatasetID == id {
+			return true
 		}
-	}
-	if !found {
-		t.Fatalf("dataset %q not visible after CREATE SCHEMA", datasetID)
-	}
-
-	// IF NOT EXISTS on existing dataset is idempotent.
-	if _, err := client.Query(
-		fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS `%s`.`%s`", projectID, datasetID),
-	).Run(ctx); err != nil {
-		t.Fatalf("CREATE SCHEMA IF NOT EXISTS (idempotent): %v", err)
-	}
-
-	if _, err := client.Query(
-		fmt.Sprintf("DROP SCHEMA `%s`.`%s`", projectID, datasetID),
-	).Run(ctx); err != nil {
-		t.Fatalf("DROP SCHEMA: %v", err)
-	}
-
-	dsIter = client.Datasets(ctx)
-	for {
-		ds, err := dsIter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ds.DatasetID == datasetID {
-			t.Fatalf("dataset %q still visible after DROP SCHEMA", datasetID)
-		}
-	}
-
-	// DROP SCHEMA IF EXISTS on absent dataset is a no-op.
-	if _, err := client.Query(
-		fmt.Sprintf("DROP SCHEMA IF EXISTS `%s`.`%s`", projectID, datasetID),
-	).Run(ctx); err != nil {
-		t.Fatalf("DROP SCHEMA IF EXISTS (absent): %v", err)
 	}
 }
 
