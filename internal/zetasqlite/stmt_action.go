@@ -254,6 +254,7 @@ type DropStmtAction struct {
 	query          string
 	formattedQuery string
 	args           []interface{}
+	datasetSpec    *DatasetSpec // populated when objectType == "SCHEMA"
 }
 
 func (a *DropStmtAction) exec(ctx context.Context, conn *Conn) error {
@@ -273,6 +274,13 @@ func (a *DropStmtAction) exec(ctx context.Context, conn *Conn) error {
 		}
 		conn.deleteFunction(a.funcMap[a.name])
 		delete(a.funcMap, a.name)
+	case "SCHEMA":
+		// DROP SCHEMA is purely a metadata operation in the
+		// emulator: there is no SQLite-side schema to drop. Record
+		// the deletion in the changed-catalog so the server's
+		// syncCatalog removes the dataset from the metaRepo (or
+		// skips, when IF EXISTS and the dataset is absent).
+		conn.deleteDataset(a.datasetSpec)
 	default:
 		return fmt.Errorf("currently unsupported DROP %s statement", a.objectType)
 	}
@@ -541,5 +549,53 @@ func (a *MergeStmtAction) Args() []interface{} {
 }
 
 func (a *MergeStmtAction) Cleanup(ctx context.Context, conn *Conn) error {
+	return nil
+}
+
+// CreateSchemaStmtAction handles CREATE SCHEMA. Schemas (= BigQuery
+// datasets) are metadata-only in the emulator — there is no
+// SQLite-side construct to create — so the action records the
+// addition in the changed-catalog and the server's syncCatalog
+// inserts the dataset into the metaRepo.
+type CreateSchemaStmtAction struct {
+	query string
+	spec  *DatasetSpec
+}
+
+func (a *CreateSchemaStmtAction) Prepare(ctx context.Context, conn *Conn) (driver.Stmt, error) {
+	return nil, nil
+}
+
+func (a *CreateSchemaStmtAction) exec(ctx context.Context, conn *Conn) error {
+	// CREATE OR REPLACE: record both Deleted and Added so the
+	// server replays drop-then-add in metaRepo. The IF NOT EXISTS
+	// idempotence is handled server-side, since "already exists"
+	// is a metaRepo concept the SQL engine cannot answer alone.
+	if a.spec.CreateMode == ast.CreateOrReplaceMode {
+		conn.deleteDataset(a.spec)
+	}
+	conn.addDataset(a.spec)
+	return nil
+}
+
+func (a *CreateSchemaStmtAction) ExecContext(ctx context.Context, conn *Conn) (driver.Result, error) {
+	if err := a.exec(ctx, conn); err != nil {
+		return nil, err
+	}
+	return &Result{conn: conn}, nil
+}
+
+func (a *CreateSchemaStmtAction) QueryContext(ctx context.Context, conn *Conn) (*Rows, error) {
+	if err := a.exec(ctx, conn); err != nil {
+		return nil, err
+	}
+	return &Rows{conn: conn}, nil
+}
+
+func (a *CreateSchemaStmtAction) Args() []interface{} {
+	return nil
+}
+
+func (a *CreateSchemaStmtAction) Cleanup(ctx context.Context, conn *Conn) error {
 	return nil
 }

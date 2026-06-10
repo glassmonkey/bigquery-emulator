@@ -113,6 +113,7 @@ func newAnalyzerOptions() (*zetasql.AnalyzerOptions, error) {
 		zetasql.StatementKindCreateFunction,
 		zetasql.StatementKindCreateTableFunction,
 		zetasql.StatementKindCreateView,
+		zetasql.StatementKindCreateSchema,
 		zetasql.StatementKindDropFunction,
 	})
 	// Enable QUALIFY without WHERE
@@ -280,6 +281,20 @@ func (a *Analyzer) Analyze(ctx context.Context, conn *Conn, query string, args [
 			// parsed reverse lookup (NodeMap.FindParsedNodes) only works
 			// when both sides come from the same Analyze call.
 			ctx = a.context(ctx, funcMap, stmtNode, out.Parsed)
+			// CREATE SCHEMA needs the parsed AST for OPTIONS
+			// decoding — CreateSchemaStmtNode.OptionList() returns
+			// raw proto rather than the wrapped *OptionNode the rest
+			// of the emulator uses, so we read OPTIONS from the
+			// parsed-side OptionsListNode (StringValue, Image, etc).
+			// Handle it inline rather than threading the parsed AST
+			// through newStmtAction.
+			if stmtNode.Kind() == ast.KindCreateSchemaStmt {
+				return a.newCreateSchemaStmtAction(
+					ps.SQL,
+					stmtNode.(*ast.CreateSchemaStmtNode),
+					out.Parsed,
+				)
+			}
 			action, err := a.newStmtAction(ctx, ps.SQL, args, stmtNode)
 			if err != nil {
 				return nil, err
@@ -582,7 +597,7 @@ func (a *Analyzer) newDropStmtAction(ctx context.Context, query string, args []d
 	}
 	objectType := node.ObjectType()
 	name := a.namePath.format(node.NamePath())
-	return &DropStmtAction{
+	action := &DropStmtAction{
 		name:           name,
 		objectType:     objectType,
 		funcMap:        funcMapFromContext(ctx),
@@ -590,7 +605,23 @@ func (a *Analyzer) newDropStmtAction(ctx context.Context, query string, args []d
 		query:          query,
 		formattedQuery: formattedQuery,
 		args:           queryArgs,
-	}, nil
+	}
+	if objectType == "SCHEMA" {
+		// Schemas are metadata-only in the emulator; record the
+		// dataset identity so DropStmtAction.exec can hand it to
+		// the changed-catalog. The SQLite formattedQuery is left in
+		// place but not executed for SCHEMA (see DropStmtAction.exec
+		// switch). namePath length tells project-qualified vs bare:
+		//   ["newds"]       → bare DROP SCHEMA newds
+		//   ["p", "newds"]  → DROP SCHEMA p.newds
+		// Either way the last element is the dataset name; the
+		// project (if any) becomes the spec's ProjectID.
+		action.datasetSpec = &DatasetSpec{
+			NamePath:   node.NamePath(),
+			IsIfExists: node.IsIfExists(),
+		}
+	}
+	return action, nil
 }
 
 func (a *Analyzer) newDropFunctionStmtAction(ctx context.Context, query string, args []driver.NamedValue, node *ast.DropFunctionStmtNode) (*DropStmtAction, error) {
@@ -608,6 +639,27 @@ func (a *Analyzer) newDropFunctionStmtAction(ctx context.Context, query string, 
 		query:      query,
 		args:       queryArgs,
 	}, nil
+}
+
+// newCreateSchemaStmtAction builds the action for CREATE SCHEMA.
+// resolved.CreateSchemaStmtNode gives us NamePath/CreateMode but
+// exposes OPTIONS only as raw proto, so OPTIONS values are read from
+// the parsed-AST sibling node where each literal is wrapped in a
+// typed parsed_ast.* node we can decode.
+func (a *Analyzer) newCreateSchemaStmtAction(query string, node *ast.CreateSchemaStmtNode, parsedRoot parsed_ast.StatementNode) (*CreateSchemaStmtAction, error) {
+	spec := &DatasetSpec{
+		NamePath:   node.NamePath(),
+		CreateMode: node.CreateMode(),
+	}
+	if parsedSchema, ok := parsedRoot.(*parsed_ast.CreateSchemaStatementNode); ok {
+		known, unknown, err := decodeCreateSchemaOptions(parsedSchema.OptionsList())
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode CREATE SCHEMA OPTIONS: %w", err)
+		}
+		spec.KnownOptions = known
+		spec.UnknownOptions = unknown
+	}
+	return &CreateSchemaStmtAction{query: query, spec: spec}, nil
 }
 
 func (a *Analyzer) newDMLStmtAction(ctx context.Context, query string, args []driver.NamedValue, node ast.Node) (*DMLStmtAction, error) {

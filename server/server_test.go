@@ -776,6 +776,176 @@ func TestDirectDDL(t *testing.T) {
 	}
 }
 
+func TestCreateSchemaDDL(t *testing.T) {
+	// Pins issue #121: dbt's `create_schema` step (CREATE SCHEMA IF NOT
+	// EXISTS) must succeed against the emulator and the dataset must
+	// be visible through the REST list/get path. Without this, dbt
+	// build cannot run against the emulator unmodified.
+	const (
+		projectID = "test"
+		datasetID = "newds"
+	)
+
+	ctx := context.Background()
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Project without any pre-created dataset — CREATE SCHEMA is the
+	// only path that produces one in this test.
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID))); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	client, err := bigquery.NewClient(
+		ctx,
+		projectID,
+		option.WithEndpoint(testServer.URL),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if _, err := client.Query(
+		fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS `%s`.`%s`", projectID, datasetID),
+	).Run(ctx); err != nil {
+		t.Fatalf("CREATE SCHEMA: %v", err)
+	}
+
+	dsIter := client.Datasets(ctx)
+	var found bool
+	for {
+		ds, err := dsIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ds.DatasetID == datasetID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dataset %q not visible after CREATE SCHEMA", datasetID)
+	}
+
+	// IF NOT EXISTS on existing dataset is idempotent.
+	if _, err := client.Query(
+		fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS `%s`.`%s`", projectID, datasetID),
+	).Run(ctx); err != nil {
+		t.Fatalf("CREATE SCHEMA IF NOT EXISTS (idempotent): %v", err)
+	}
+
+	if _, err := client.Query(
+		fmt.Sprintf("DROP SCHEMA `%s`.`%s`", projectID, datasetID),
+	).Run(ctx); err != nil {
+		t.Fatalf("DROP SCHEMA: %v", err)
+	}
+
+	dsIter = client.Datasets(ctx)
+	for {
+		ds, err := dsIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ds.DatasetID == datasetID {
+			t.Fatalf("dataset %q still visible after DROP SCHEMA", datasetID)
+		}
+	}
+
+	// DROP SCHEMA IF EXISTS on absent dataset is a no-op.
+	if _, err := client.Query(
+		fmt.Sprintf("DROP SCHEMA IF EXISTS `%s`.`%s`", projectID, datasetID),
+	).Run(ctx); err != nil {
+		t.Fatalf("DROP SCHEMA IF EXISTS (absent): %v", err)
+	}
+}
+
+func TestCreateSchemaWithOptions(t *testing.T) {
+	// Pins the "soundness" boundary chosen in the design discussion
+	// for issue #121: OPTIONS the emulator persists must round-trip
+	// through REST GET (description / labels / location / expiration
+	// days); OPTIONS BigQuery defines but the emulator does NOT
+	// persist must still be accepted (= dbt unmodified) — that
+	// completeness path is covered by the library-layer test.
+	const (
+		projectID = "test"
+		datasetID = "with_opts"
+	)
+
+	ctx := context.Background()
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID))); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	client, err := bigquery.NewClient(
+		ctx,
+		projectID,
+		option.WithEndpoint(testServer.URL),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	q := fmt.Sprintf(
+		"CREATE SCHEMA `%s`.`%s` OPTIONS("+
+			"description='dbt-managed', "+
+			"friendly_name='Friendly Name', "+
+			"location='US', "+
+			"labels=[(\"env\",\"dev\"),(\"team\",\"data\")], "+
+			"default_table_expiration_days=7"+
+			")",
+		projectID, datasetID,
+	)
+	if _, err := client.Query(q).Run(ctx); err != nil {
+		t.Fatalf("CREATE SCHEMA with OPTIONS: %v", err)
+	}
+
+	md, err := client.Dataset(datasetID).Metadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md.Description != "dbt-managed" {
+		t.Errorf("Description: want %q, got %q", "dbt-managed", md.Description)
+	}
+	if md.Name != "Friendly Name" {
+		t.Errorf("FriendlyName: want %q, got %q", "Friendly Name", md.Name)
+	}
+	if md.Location != "US" {
+		t.Errorf("Location: want %q, got %q", "US", md.Location)
+	}
+	wantLabels := map[string]string{"env": "dev", "team": "data"}
+	if diff := cmp.Diff(wantLabels, md.Labels); diff != "" {
+		t.Errorf("Labels (-want +got):\n%s", diff)
+	}
+	// 7 days = 7 * 86_400_000 ms.
+	if md.DefaultTableExpiration != 7*24*time.Hour {
+		t.Errorf("DefaultTableExpiration: want %v, got %v", 7*24*time.Hour, md.DefaultTableExpiration)
+	}
+}
+
 func TestView(t *testing.T) {
 	const (
 		projectName = "test"
