@@ -9,17 +9,20 @@ import (
 )
 
 // decodeCreateSchemaOptions evaluates parsed-AST OPTIONS into a
-// DatasetOptions value. The resolved-AST side of CreateSchemaStmtNode
-// exposes OPTIONS only as raw proto, so the parsed-AST side
-// (OptionsListNode → OptionsEntryNode → typed literal nodes) is the
-// path the emulator decodes from. See analyzer.go
-// newCreateSchemaStmtAction for the wiring.
+// DatasetOptions value plus the list of OPTIONS names the emulator
+// received but does not persist.
+//
+// The resolved-AST side of CreateSchemaStmtNode exposes OPTIONS only
+// as raw proto, so values are read from the parsed-AST side
+// (OptionsListNode → OptionsEntryNode → typed literal nodes). See
+// analyzer.go newCreateSchemaStmtAction for the wiring.
 //
 // The case list is the *authoritative* enumeration of OPTIONS the
-// emulator persists; OPTIONS not in this switch are accepted but
-// returned in the unknown slice so the server can warn-log them.
-// Keep this list aligned with datasetContentFromOptions on the
-// server side — both lists encode the "what we persist" boundary.
+// emulator persists; anything outside this switch lands in `unknown`
+// so the server can warn-log it (= accept on the wire without
+// pretending to persist). Keep this list aligned with the field copy
+// in addDatasetMetadata on the server side — both encode the
+// "what we persist" boundary.
 func decodeCreateSchemaOptions(opts *parsed.OptionsListNode) (DatasetOptions, []string, error) {
 	var out DatasetOptions
 	if opts == nil {
@@ -32,146 +35,118 @@ func decodeCreateSchemaOptions(opts *parsed.OptionsListNode) (DatasetOptions, []
 			continue
 		}
 		name := strings.ToLower(ident.IdString())
-		if err := assignSchemaOption(&out, name, entry.Value()); err != nil {
-			if err == errUnknownSchemaOption {
-				unknown = append(unknown, name)
-				continue
+		value := entry.Value()
+		switch name {
+		case "description":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
 			}
-			return out, nil, fmt.Errorf("OPTIONS(%s): %w", name, err)
+			out.Description = s.StringValue()
+		case "friendly_name":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
+			}
+			out.FriendlyName = s.StringValue()
+		case "location":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
+			}
+			out.Location = s.StringValue()
+		case "storage_billing_model":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
+			}
+			out.StorageBillingModel = s.StringValue()
+		case "default_collation":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
+			}
+			out.DefaultCollation = s.StringValue()
+		case "default_rounding_mode":
+			s, ok := value.(*parsed.StringLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected STRING, got %s", name, value.Kind())
+			}
+			out.DefaultRoundingMode = s.StringValue()
+		case "default_table_expiration_days":
+			n, err := parseIntLiteral(value)
+			if err != nil {
+				return out, nil, fmt.Errorf("OPTIONS(%s): %w", name, err)
+			}
+			out.DefaultTableExpirationDays = n
+		case "default_partition_expiration_days":
+			n, err := parseIntLiteral(value)
+			if err != nil {
+				return out, nil, fmt.Errorf("OPTIONS(%s): %w", name, err)
+			}
+			out.DefaultPartitionExpirationDays = n
+		case "max_time_travel_hours":
+			f, err := parseNumberLiteral(value)
+			if err != nil {
+				return out, nil, fmt.Errorf("OPTIONS(%s): %w", name, err)
+			}
+			out.MaxTimeTravelHours = f
+		case "is_case_insensitive":
+			b, ok := value.(*parsed.BooleanLiteralNode)
+			if !ok {
+				return out, nil, fmt.Errorf("OPTIONS(%s): expected BOOL, got %s", name, value.Kind())
+			}
+			out.IsCaseInsensitive = b.Value()
+		case "labels":
+			labels, err := evalLabelsOption(value)
+			if err != nil {
+				return out, nil, fmt.Errorf("OPTIONS(%s): %w", name, err)
+			}
+			out.Labels = labels
+		default:
+			unknown = append(unknown, name)
 		}
 	}
 	return out, unknown, nil
 }
 
-// errUnknownSchemaOption is a sentinel: assignSchemaOption returns
-// it when the OPTIONS name does not correspond to any persisted
-// field, so the caller can route it to UnknownOptions instead of
-// failing.
-var errUnknownSchemaOption = fmt.Errorf("unknown schema option")
-
-func assignSchemaOption(out *DatasetOptions, name string, value parsed.ExpressionNode) error {
-	switch name {
-	case "description":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.Description = v
-	case "friendly_name":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.FriendlyName = v
-	case "location":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.Location = v
-	case "storage_billing_model":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.StorageBillingModel = v
-	case "default_collation":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.DefaultCollation = v
-	case "default_rounding_mode":
-		v, err := evalStringOption(value)
-		if err != nil {
-			return err
-		}
-		out.DefaultRoundingMode = v
-	case "labels":
-		v, err := evalLabelsOption(value)
-		if err != nil {
-			return err
-		}
-		out.Labels = v
-	case "default_table_expiration_days":
-		v, err := evalInt64Option(value)
-		if err != nil {
-			return err
-		}
-		out.DefaultTableExpirationDays = v
-	case "default_partition_expiration_days":
-		v, err := evalInt64Option(value)
-		if err != nil {
-			return err
-		}
-		out.DefaultPartitionExpirationDays = v
-	case "max_time_travel_hours":
-		v, err := evalFloat64Option(value)
-		if err != nil {
-			return err
-		}
-		out.MaxTimeTravelHours = v
-	case "is_case_insensitive":
-		v, err := evalBoolOption(value)
-		if err != nil {
-			return err
-		}
-		out.IsCaseInsensitive = v
-	default:
-		return errUnknownSchemaOption
-	}
-	return nil
-}
-
-func evalStringOption(expr parsed.ExpressionNode) (string, error) {
-	s, ok := expr.(*parsed.StringLiteralNode)
-	if !ok {
-		return "", fmt.Errorf("expected STRING literal, got %s", expr.Kind())
-	}
-	return s.StringValue(), nil
-}
-
-func evalInt64Option(expr parsed.ExpressionNode) (int64, error) {
+// parseIntLiteral parses an IntLiteralNode. The lexer emits the
+// literal as written (including a trailing "L" for long literals,
+// which strconv.ParseInt does not accept), so the suffix is trimmed
+// before parsing. Kept as a helper because the case "INT literal +
+// trim L + ParseInt" is reused by parseNumberLiteral.
+func parseIntLiteral(expr parsed.ExpressionNode) (int64, error) {
 	n, ok := expr.(*parsed.IntLiteralNode)
 	if !ok {
-		return 0, fmt.Errorf("expected INT literal, got %s", expr.Kind())
+		return 0, fmt.Errorf("expected INT, got %s", expr.Kind())
 	}
-	// IntLiteralNode.Image() can include a trailing "L" suffix for
-	// long literals; strconv.ParseInt does not accept it.
 	s := strings.TrimSuffix(n.Image(), "L")
 	v, err := strconv.ParseInt(s, 0, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid int literal %q: %w", n.Image(), err)
+		return 0, fmt.Errorf("invalid INT literal %q: %w", n.Image(), err)
 	}
 	return v, nil
 }
 
-func evalFloat64Option(expr parsed.ExpressionNode) (float64, error) {
+// parseNumberLiteral accepts either a FLOAT or INT literal and
+// returns float64. `max_time_travel_hours=168` is valid BigQuery DDL,
+// so an INT in float position is promoted rather than rejected.
+func parseNumberLiteral(expr parsed.ExpressionNode) (float64, error) {
 	switch n := expr.(type) {
 	case *parsed.FloatLiteralNode:
 		v, err := strconv.ParseFloat(n.Image(), 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid float literal %q: %w", n.Image(), err)
+			return 0, fmt.Errorf("invalid FLOAT literal %q: %w", n.Image(), err)
 		}
 		return v, nil
 	case *parsed.IntLiteralNode:
-		// `max_time_travel_hours=168` is valid SQL; promote to float.
-		s := strings.TrimSuffix(n.Image(), "L")
-		i, err := strconv.ParseInt(s, 0, 64)
+		i, err := parseIntLiteral(n)
 		if err != nil {
-			return 0, fmt.Errorf("invalid number literal %q: %w", n.Image(), err)
+			return 0, err
 		}
 		return float64(i), nil
 	}
-	return 0, fmt.Errorf("expected number literal, got %s", expr.Kind())
-}
-
-func evalBoolOption(expr parsed.ExpressionNode) (bool, error) {
-	b, ok := expr.(*parsed.BooleanLiteralNode)
-	if !ok {
-		return false, fmt.Errorf("expected BOOL literal, got %s", expr.Kind())
-	}
-	return b.Value(), nil
+	return 0, fmt.Errorf("expected number, got %s", expr.Kind())
 }
 
 // evalLabelsOption decodes the `labels` OPTIONS shape, which BigQuery
@@ -182,35 +157,27 @@ func evalBoolOption(expr parsed.ExpressionNode) (bool, error) {
 func evalLabelsOption(expr parsed.ExpressionNode) (map[string]string, error) {
 	arr, ok := expr.(*parsed.ArrayConstructorNode)
 	if !ok {
-		return nil, fmt.Errorf("expected ARRAY literal, got %s", expr.Kind())
+		return nil, fmt.Errorf("expected ARRAY, got %s", expr.Kind())
 	}
 	out := map[string]string{}
 	for _, elem := range arr.Elements() {
-		key, value, err := evalLabelEntry(elem)
-		if err != nil {
-			return nil, fmt.Errorf("label entry: %w", err)
+		sc, ok := elem.(*parsed.StructConstructorWithParensNode)
+		if !ok {
+			return nil, fmt.Errorf("expected STRUCT element, got %s", elem.Kind())
 		}
-		out[key] = value
+		fields := sc.FieldExpressions()
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("expected 2 STRUCT fields, got %d", len(fields))
+		}
+		key, ok := fields[0].(*parsed.StringLiteralNode)
+		if !ok {
+			return nil, fmt.Errorf("label key: expected STRING, got %s", fields[0].Kind())
+		}
+		value, ok := fields[1].(*parsed.StringLiteralNode)
+		if !ok {
+			return nil, fmt.Errorf("label value: expected STRING, got %s", fields[1].Kind())
+		}
+		out[key.StringValue()] = value.StringValue()
 	}
 	return out, nil
-}
-
-func evalLabelEntry(elem parsed.ExpressionNode) (string, string, error) {
-	sc, ok := elem.(*parsed.StructConstructorWithParensNode)
-	if !ok {
-		return "", "", fmt.Errorf("expected STRUCT element, got %s", elem.Kind())
-	}
-	fields := sc.FieldExpressions()
-	if len(fields) != 2 {
-		return "", "", fmt.Errorf("expected 2 STRUCT fields, got %d", len(fields))
-	}
-	key, err := evalStringOption(fields[0])
-	if err != nil {
-		return "", "", fmt.Errorf("key: %w", err)
-	}
-	value, err := evalStringOption(fields[1])
-	if err != nil {
-		return "", "", fmt.Errorf("value: %w", err)
-	}
-	return key, value, nil
 }

@@ -1631,6 +1631,24 @@ func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.Da
 		return err
 	}
 	defer tx.RollbackIfNotCommitted()
+	// Translate the typed DatasetOptions into bigqueryv2.Dataset
+	// fields. Field set mirrors the persisted case-list in
+	// decodeCreateSchemaOptions; the *_days options carry a unit
+	// conversion (BigQuery DDL says days, bigqueryv2.Dataset takes
+	// ms).
+	content := &bigqueryv2.Dataset{
+		Description:                  spec.Options.Description,
+		FriendlyName:                 spec.Options.FriendlyName,
+		Location:                     spec.Options.Location,
+		StorageBillingModel:          spec.Options.StorageBillingModel,
+		DefaultCollation:             spec.Options.DefaultCollation,
+		DefaultRoundingMode:          spec.Options.DefaultRoundingMode,
+		Labels:                       spec.Options.Labels,
+		DefaultTableExpirationMs:     spec.Options.DefaultTableExpirationDays * 86_400_000,
+		DefaultPartitionExpirationMs: spec.Options.DefaultPartitionExpirationDays * 86_400_000,
+		MaxTimeTravelHours:           int64(spec.Options.MaxTimeTravelHours),
+		IsCaseInsensitive:            spec.Options.IsCaseInsensitive,
+	}
 	if err := project.AddDataset(
 		ctx,
 		tx.Tx(),
@@ -1638,7 +1656,7 @@ func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.Da
 			server.metaRepo,
 			project.ID,
 			datasetID,
-			datasetContentFromOptions(spec.Options),
+			content,
 			nil,
 			nil,
 			nil,
@@ -1705,28 +1723,6 @@ func resolveDatasetIdentity(spec *zetasqlite.DatasetSpec, defaultProjectID strin
 		// last element as the dataset and the second-to-last as
 		// the project.
 		return spec.NamePath[len(spec.NamePath)-2], spec.NamePath[len(spec.NamePath)-1], nil
-	}
-}
-
-// datasetContentFromOptions translates DatasetOptions into the
-// corresponding fields on bigqueryv2.Dataset. Unit conversions
-// (days → ms for expirations) live here so callers don't have to
-// duplicate them. The case list mirrors decodeCreateSchemaOptions
-// in internal/zetasqlite/dataset_options.go — if you add a new
-// option, update both.
-func datasetContentFromOptions(opts zetasqlite.DatasetOptions) *bigqueryv2.Dataset {
-	return &bigqueryv2.Dataset{
-		Description:                  opts.Description,
-		FriendlyName:                 opts.FriendlyName,
-		Location:                     opts.Location,
-		StorageBillingModel:          opts.StorageBillingModel,
-		DefaultCollation:             opts.DefaultCollation,
-		DefaultRoundingMode:          opts.DefaultRoundingMode,
-		Labels:                       opts.Labels,
-		DefaultTableExpirationMs:     opts.DefaultTableExpirationDays * 86_400_000,
-		DefaultPartitionExpirationMs: opts.DefaultPartitionExpirationDays * 86_400_000,
-		MaxTimeTravelHours:           int64(opts.MaxTimeTravelHours),
-		IsCaseInsensitive:            opts.IsCaseInsensitive,
 	}
 }
 
