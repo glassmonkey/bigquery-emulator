@@ -5,15 +5,21 @@ import (
 	"testing"
 
 	"github.com/glassmonkey/bigquery-emulator/internal/zetasqlite"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestResolveDatasetIdentity(t *testing.T) {
+	// identity packs (projectID, datasetID) so each happy case
+	// asserts on a single value (R3 / Assertion Roulette).
+	type identity struct {
+		ProjectID string
+		DatasetID string
+	}
 	tests := []struct {
 		name             string
 		namePath         []string
 		defaultProjectID string
-		wantProjectID    string
-		wantDatasetID    string
+		want             identity
 		wantErrSubstr    string
 	}{
 		{
@@ -25,8 +31,7 @@ func TestResolveDatasetIdentity(t *testing.T) {
 			name:             "bare name falls back to defaultProjectID",
 			namePath:         []string{"newds"},
 			defaultProjectID: "p",
-			wantProjectID:    "p",
-			wantDatasetID:    "newds",
+			want:             identity{ProjectID: "p", DatasetID: "newds"},
 		},
 		{
 			name:          "bare name without defaultProjectID is an error",
@@ -37,14 +42,12 @@ func TestResolveDatasetIdentity(t *testing.T) {
 			name:             "project-qualified name wins over defaultProjectID",
 			namePath:         []string{"other", "newds"},
 			defaultProjectID: "p",
-			wantProjectID:    "other",
-			wantDatasetID:    "newds",
+			want:             identity{ProjectID: "other", DatasetID: "newds"},
 		},
 		{
-			name:          "longer path takes last as dataset and second-to-last as project",
-			namePath:      []string{"folder", "p", "newds"},
-			wantProjectID: "p",
-			wantDatasetID: "newds",
+			name:     "longer path takes last as dataset and second-to-last as project",
+			namePath: []string{"folder", "p", "newds"},
+			want:     identity{ProjectID: "p", DatasetID: "newds"},
 		},
 	}
 
@@ -64,11 +67,9 @@ func TestResolveDatasetIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if gotProject != tt.wantProjectID {
-				t.Errorf("projectID: want %q, got %q", tt.wantProjectID, gotProject)
-			}
-			if gotDataset != tt.wantDatasetID {
-				t.Errorf("datasetID: want %q, got %q", tt.wantDatasetID, gotDataset)
+			got := identity{ProjectID: gotProject, DatasetID: gotDataset}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("identity (-want +got):\n%s", diff)
 			}
 		})
 	}
