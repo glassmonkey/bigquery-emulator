@@ -92,6 +92,27 @@ UNION ALL
 			query:        `SELECT "a" || "b"`,
 			expectedRows: [][]interface{}{{"ab"}},
 		},
+		// Regression test for https://github.com/glassmonkey/bigquery-emulator/issues/98
+		{
+			name:         "concat string operator with int64 rhs",
+			query:        `SELECT "abc" || 123`,
+			expectedRows: [][]interface{}{{"abc123"}},
+		},
+		{
+			name:         "concat string operator with int64 lhs",
+			query:        `SELECT 123 || "abc"`,
+			expectedRows: [][]interface{}{{"123abc"}},
+		},
+		{
+			name:         "concat string operator with float64",
+			query:        `SELECT "abc" || 1.5`,
+			expectedRows: [][]interface{}{{"abc1.5"}},
+		},
+		{
+			name:         "concat string operator with date",
+			query:        `SELECT "abc" || DATE "2026-01-01"`,
+			expectedRows: [][]interface{}{{"abc2026-01-01"}},
+		},
 		{
 			name:         "concat array operator",
 			query:        `SELECT [1, 2] || [3, 4]`,
@@ -119,6 +140,37 @@ UNION ALL
 			name:         "right shift operator",
 			query:        "SELECT 4 >> 1",
 			expectedRows: [][]interface{}{{int64(2)}},
+		},
+		// Regression test for https://github.com/glassmonkey/bigquery-emulator/issues/99
+		// Negative shift amounts panic in Go's <<,>> operators; BigQuery returns a query-level error.
+		{
+			name:        "left shift operator with negative offset",
+			query:       "SELECT 1 << -1",
+			expectedErr: "Bitwise shift by negative offset.",
+		},
+		{
+			name:        "right shift operator with negative offset",
+			query:       "SELECT 8 >> -1",
+			expectedErr: "Bitwise shift by negative offset.",
+		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/113
+		// BigQuery's `>>` is a *logical* (unsigned) right shift — it zero-fills the
+		// upper bits regardless of sign. Go's `>>` on int64 is arithmetic (signed).
+		// Expected values are byte-verified against real BigQuery.
+		{
+			name:         "right shift operator with negative base (small)",
+			query:        "SELECT -8 >> 2",
+			expectedRows: [][]interface{}{{int64(4611686018427387902)}},
+		},
+		{
+			name:         "right shift operator with negative base (-1 fills with zeros)",
+			query:        "SELECT CAST(-1 AS INT64) >> 1",
+			expectedRows: [][]interface{}{{int64(9223372036854775807)}},
+		},
+		{
+			name:         "right shift operator on INT64 min",
+			query:        "SELECT -9223372036854775808 >> 1",
+			expectedRows: [][]interface{}{{int64(4611686018427387904)}},
 		},
 		// priority 6 operator
 		{
@@ -303,6 +355,79 @@ UNION ALL
 			query: `SELECT 5 NOT IN (1, 2, 3, 4), null NOT IN (1), null NOT IN (null)`,
 			// When left-hand side is null, null is always returned
 			expectedRows: [][]interface{}{{true, nil, nil}},
+		},
+		// IN UNNEST baseline: array without NULL elements. Pinned alongside
+		// the NULL-element cases below so the 2x2 (NULL × match) table is
+		// fully documented.
+		{
+			name:         "in unnest classic match",
+			query:        `SELECT 1 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest classic no match",
+			query:        `SELECT 9 IN UNNEST([1, 2])`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/100
+		// IN UNNEST against an array whose elements include SQL NULL used to
+		// nil-deref on val.EQ(a) inside ArrayValue.Has. The correct BigQuery
+		// semantics: TRUE if a non-NULL element matches; NULL if no non-NULL
+		// match but a NULL element is present; FALSE otherwise.
+		{
+			name:         "in unnest with null element and match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null element and no match",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "in unnest with only null element",
+			query:        `SELECT 1 IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		// Pin the NULL-element skip path across representative groupable
+		// types (STRING, BOOL, FLOAT64, DATE). STRUCT is intentionally
+		// covered by issue #101's regression suite, not here.
+		{
+			name:         "in unnest with null string element",
+			query:        `SELECT 'a' IN UNNEST([CAST(NULL AS STRING), 'a'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null bool element",
+			query:        `SELECT true IN UNNEST([CAST(NULL AS BOOL), true])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null float element",
+			query:        `SELECT 1.5 IN UNNEST([CAST(NULL AS FLOAT64), 1.5])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "in unnest with null date element",
+			query:        `SELECT DATE '2024-01-01' IN UNNEST([CAST(NULL AS DATE), DATE '2024-01-01'])`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		// NOT IN UNNEST is resolved as $not($in_array(...)); the same
+		// ARRAY_IN fix must propagate NULL through the not-wrapper.
+		{
+			name:         "not in unnest with null element and match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 1])`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "not in unnest with null element and no match",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64), 2])`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "not in unnest with only null element",
+			query:        `SELECT 1 NOT IN UNNEST([CAST(NULL AS INT64)])`,
+			expectedRows: [][]interface{}{{nil}},
 		},
 		{
 			name:         "is null operator",

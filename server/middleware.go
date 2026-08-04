@@ -44,19 +44,26 @@ func sequentialAccessMiddleware() func(http.Handler) http.Handler {
 // span and stashes the server's tracer in ctx so handler code
 // can pull it via tracing.FromContext and open child spans.
 //
-// otelhttp resolves its TracerProvider lazily from the otel
-// package-level global on every request. SetOTel keeps that
-// global in sync with s.tracer so toggling tracing at runtime
-// — or wiring it up *after* server.New has already been called
-// — takes effect on the next request, instead of being baked
-// in at middleware-construction time.
+// otelhttp is wired to the *server-local* TracerProvider rather
+// than to `otel.GetTracerProvider()`. Without the explicit
+// `WithTracerProvider`, otelhttp would fall through to the
+// process-wide global, which means an application that embeds
+// bigquery-emulator as a library and configures its own global
+// tracer would silently start receiving the emulator's spans.
+// Going through `s.tracerProvider` keeps the emulator's tracing
+// state opt-in via SetOTel and isolated from whatever the host
+// process is doing with otel.
 func tracingMiddleware(s *Server) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		injected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := tracing.WithTracer(r.Context(), s.tracer)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
-		return otelhttp.NewHandler(injected, "bigquery-emulator")
+		return otelhttp.NewHandler(
+			injected,
+			"bigquery-emulator",
+			otelhttp.WithTracerProvider(s.tracerProvider),
+		)
 	}
 }
 

@@ -1543,7 +1543,7 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 			return nil, fmt.Errorf("failed to commit job: %w", err)
 		}
 		if response != nil && response.ChangedCatalog.Changed() {
-			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
+			if err := syncCatalog(ctx, r.server, response.ChangedCatalog, r.project.ID); err != nil {
 				return nil, err
 			}
 		}
@@ -1552,7 +1552,21 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (r
 	return job, nil
 }
 
-func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCatalog) error {
+// syncCatalog reflects the SQL engine's ChangedCatalog into the
+// metaRepo. defaultProjectID is the project the request landed on;
+// it is used as the target project for bare `CREATE SCHEMA newds` /
+// `DROP SCHEMA newds` (i.e. SQL without an explicit project
+// qualifier).
+func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCatalog, defaultProjectID string) error {
+	// Datasets first: a CREATE SCHEMA followed by CREATE TABLE in
+	// the same script needs the dataset to exist before the table
+	// addTableMetadata runs (it calls project.Dataset(datasetID)
+	// which returns nil otherwise).
+	for _, dataset := range cat.Dataset.Added {
+		if err := addDatasetMetadata(ctx, server, dataset, defaultProjectID); err != nil {
+			return err
+		}
+	}
 	for _, table := range cat.Table.Added {
 		if err := addTableMetadata(ctx, server, table); err != nil {
 			return err
@@ -1563,7 +1577,153 @@ func syncCatalog(ctx context.Context, server *Server, cat *zetasqlite.ChangedCat
 			return err
 		}
 	}
+	// Datasets last on the delete side: a DROP TABLE followed by
+	// DROP SCHEMA needs the table-row delete to complete first.
+	for _, dataset := range cat.Dataset.Deleted {
+		if err := deleteDatasetMetadata(ctx, server, dataset, defaultProjectID); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// addDatasetMetadata reflects a CREATE SCHEMA into the metaRepo. The
+// project the dataset lives in is taken from the SQL when it is
+// project-qualified (`p.newds`), otherwise from defaultProjectID
+// (the project the request landed on). OPTIONS the emulator
+// persists are written onto the bigqueryv2.Dataset content so REST
+// GET reads them back; OPTIONS outside that set are warn-logged so
+// the user can see silent-ignore boundaries rather than guess them.
+func addDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec, defaultProjectID string) error {
+	projectID, datasetID, err := resolveDatasetIdentity(spec, defaultProjectID)
+	if err != nil {
+		return err
+	}
+	project, err := server.metaRepo.FindProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if existing := project.Dataset(datasetID); existing != nil {
+		// CREATE SCHEMA IF NOT EXISTS on an existing dataset is a
+		// no-op (Project.AddDataset would otherwise return
+		// "dataset already created"); CREATE OR REPLACE is handled
+		// via a preceding Deleted entry on the changed-catalog so
+		// the dataset is gone by the time we get here. The default
+		// mode reaches here only if the dataset is absent.
+		if spec.IsIfNotExists() {
+			return nil
+		}
+	}
+	for _, name := range spec.UnknownOptions {
+		logger.Logger(ctx).Warn(
+			"CREATE SCHEMA OPTIONS accepted but not persisted by the emulator",
+			zap.String("project", projectID),
+			zap.String("dataset", datasetID),
+			zap.String("option", name),
+		)
+	}
+	conn, err := server.connMgr.Connection(ctx, projectID, datasetID)
+	if err != nil {
+		return err
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.RollbackIfNotCommitted()
+	// Translate the typed DatasetOptions into bigqueryv2.Dataset
+	// fields. Field set mirrors the persisted case-list in
+	// decodeCreateSchemaOptions; the *_days options carry a unit
+	// conversion (BigQuery DDL says days, bigqueryv2.Dataset takes
+	// ms).
+	content := &bigqueryv2.Dataset{
+		Description:                  spec.Options.Description,
+		FriendlyName:                 spec.Options.FriendlyName,
+		Location:                     spec.Options.Location,
+		StorageBillingModel:          spec.Options.StorageBillingModel,
+		DefaultCollation:             spec.Options.DefaultCollation,
+		DefaultRoundingMode:          spec.Options.DefaultRoundingMode,
+		Labels:                       spec.Options.Labels,
+		DefaultTableExpirationMs:     spec.Options.DefaultTableExpirationDays * 86_400_000,
+		DefaultPartitionExpirationMs: spec.Options.DefaultPartitionExpirationDays * 86_400_000,
+		MaxTimeTravelHours:           int64(spec.Options.MaxTimeTravelHours),
+		IsCaseInsensitive:            spec.Options.IsCaseInsensitive,
+	}
+	if err := project.AddDataset(
+		ctx,
+		tx.Tx(),
+		metadata.NewDataset(
+			server.metaRepo,
+			project.ID,
+			datasetID,
+			content,
+			nil,
+			nil,
+			nil,
+		),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// deleteDatasetMetadata reflects a DROP SCHEMA into the metaRepo.
+// DROP SCHEMA IF EXISTS treats "dataset not found" as a no-op rather
+// than an error; the emulator does not yet enforce CASCADE / RESTRICT
+// semantics on contained tables — that is tracked separately.
+func deleteDatasetMetadata(ctx context.Context, server *Server, spec *zetasqlite.DatasetSpec, defaultProjectID string) error {
+	projectID, datasetID, err := resolveDatasetIdentity(spec, defaultProjectID)
+	if err != nil {
+		return err
+	}
+	project, err := server.metaRepo.FindProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if project.Dataset(datasetID) == nil {
+		if spec.IsIfExists {
+			return nil
+		}
+		return fmt.Errorf("dataset %q not found in project %q", datasetID, projectID)
+	}
+	conn, err := server.connMgr.Connection(ctx, projectID, datasetID)
+	if err != nil {
+		return err
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.RollbackIfNotCommitted()
+	if err := project.DeleteDataset(ctx, tx.Tx(), datasetID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// resolveDatasetIdentity picks (projectID, datasetID) out of a
+// DatasetSpec. A project-qualified NamePath like `[p, newds]` wins
+// over defaultProjectID (the SQL says where to put the dataset); a
+// bare `[newds]` falls back to defaultProjectID.
+func resolveDatasetIdentity(spec *zetasqlite.DatasetSpec, defaultProjectID string) (string, string, error) {
+	switch len(spec.NamePath) {
+	case 0:
+		return "", "", fmt.Errorf("CREATE/DROP SCHEMA has empty NamePath")
+	case 1:
+		if defaultProjectID == "" {
+			return "", "", fmt.Errorf(
+				"bare SCHEMA name %q requires a default project on the request (qualify with project.dataset)",
+				spec.NamePath[0],
+			)
+		}
+		return defaultProjectID, spec.NamePath[0], nil
+	default:
+		// `[p, newds]` or longer. BigQuery does not have nested
+		// schemas, so >2 is rejected upstream by ZetaSQL; take the
+		// last element as the dataset and the second-to-last as
+		// the project.
+		return spec.NamePath[len(spec.NamePath)-2], spec.NamePath[len(spec.NamePath)-1], nil
+	}
 }
 
 func addTableMetadata(ctx context.Context, server *Server, spec *zetasqlite.TableSpec) error {
@@ -1815,7 +1975,7 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (res
 			return nil, err
 		}
 		if response.ChangedCatalog.Changed() {
-			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
+			if err := syncCatalog(ctx, r.server, response.ChangedCatalog, r.project.ID); err != nil {
 				return nil, err
 			}
 		}

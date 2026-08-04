@@ -8,17 +8,19 @@ import (
 type ChangedCatalog struct {
 	Table    *ChangedTable
 	Function *ChangedFunction
+	Dataset  *ChangedDataset
 }
 
 func newChangedCatalog() *ChangedCatalog {
 	return &ChangedCatalog{
 		Table:    &ChangedTable{},
 		Function: &ChangedFunction{},
+		Dataset:  &ChangedDataset{},
 	}
 }
 
 func (c *ChangedCatalog) Changed() bool {
-	return c.Table.Changed() || c.Function.Changed()
+	return c.Table.Changed() || c.Function.Changed() || c.Dataset.Changed()
 }
 
 type ChangedTable struct {
@@ -38,6 +40,19 @@ type ChangedFunction struct {
 
 func (f *ChangedFunction) Changed() bool {
 	return len(f.Added) != 0 || len(f.Deleted) != 0
+}
+
+// ChangedDataset carries CREATE SCHEMA / DROP SCHEMA effects observed
+// during a statement. The server's syncCatalog reads these to
+// insert/delete dataset metadata in the metaRepo, mirroring how
+// table/function changes flow.
+type ChangedDataset struct {
+	Added   []*DatasetSpec
+	Deleted []*DatasetSpec
+}
+
+func (d *ChangedDataset) Changed() bool {
+	return len(d.Added) != 0 || len(d.Deleted) != 0
 }
 
 type Conn struct {
@@ -142,4 +157,36 @@ func (c *Conn) removeFromAddedFunctionsIfExists(spec *FunctionSpec) {
 		funcs = append(funcs, fun)
 	}
 	c.cc.Function.Added = funcs
+}
+
+func (c *Conn) addDataset(spec *DatasetSpec) {
+	c.removeFromDeletedDatasetsIfExists(spec)
+	c.cc.Dataset.Added = append(c.cc.Dataset.Added, spec)
+}
+
+func (c *Conn) deleteDataset(spec *DatasetSpec) {
+	c.removeFromAddedDatasetsIfExists(spec)
+	c.cc.Dataset.Deleted = append(c.cc.Dataset.Deleted, spec)
+}
+
+func (c *Conn) removeFromDeletedDatasetsIfExists(spec *DatasetSpec) {
+	datasets := make([]*DatasetSpec, 0, len(c.cc.Dataset.Deleted))
+	for _, ds := range c.cc.Dataset.Deleted {
+		if ds.DatasetID() == spec.DatasetID() {
+			continue
+		}
+		datasets = append(datasets, ds)
+	}
+	c.cc.Dataset.Deleted = datasets
+}
+
+func (c *Conn) removeFromAddedDatasetsIfExists(spec *DatasetSpec) {
+	datasets := make([]*DatasetSpec, 0, len(c.cc.Dataset.Added))
+	for _, ds := range c.cc.Dataset.Added {
+		if ds.DatasetID() == spec.DatasetID() {
+			continue
+		}
+		datasets = append(datasets, ds)
+	}
+	c.cc.Dataset.Added = datasets
 }

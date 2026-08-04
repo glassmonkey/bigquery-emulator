@@ -1025,19 +1025,6 @@ type ArrayValue struct {
 	values []Value
 }
 
-func (av *ArrayValue) Has(v Value) (bool, error) {
-	for _, val := range av.values {
-		cond, err := val.EQ(v)
-		if err != nil {
-			return false, err
-		}
-		if cond {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (av *ArrayValue) Add(v Value) (Value, error) {
 	return nil, fmt.Errorf("add operation is unsupported for array %v", av)
 }

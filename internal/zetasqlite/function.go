@@ -138,6 +138,12 @@ func BIT_LEFT_SHIFT(a, b Value) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
+	if vb < 0 {
+		// Wording matches the real BigQuery error verbatim; keep aligned so callers
+		// that switch on the BQ error string stay transparent. BIT_RIGHT_SHIFT below
+		// shares the same invariant.
+		return nil, fmt.Errorf("Bitwise shift by negative offset.")
+	}
 	return IntValue(va << vb), nil
 }
 
@@ -150,7 +156,14 @@ func BIT_RIGHT_SHIFT(a, b Value) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return IntValue(va >> vb), nil
+	if vb < 0 {
+		return nil, fmt.Errorf("Bitwise shift by negative offset.")
+	}
+	// BigQuery's `>>` is a *logical* (unsigned) right shift — the upper bits
+	// are zero-filled regardless of sign. Go's int64 `>>` is arithmetic
+	// (signed) and sign-extends, so the negative-base result diverges from
+	// BigQuery. Reinterpret as uint64 to match BigQuery semantics.
+	return IntValue(int64(uint64(va) >> vb)), nil
 }
 
 func BIT_AND(a, b Value) (Value, error) {
@@ -194,11 +207,29 @@ func ARRAY_IN(a, b Value) (Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	cond, err := array.Has(a)
-	if err != nil {
-		return nil, err
+	// BigQuery semantics for `x IN UNNEST(array)`:
+	//   - TRUE  if a non-NULL element equals x
+	//   - NULL  if no non-NULL match, but a NULL element is in the array
+	//   - FALSE otherwise
+	// A nil element here represents SQL NULL; skip equality and remember it.
+	hasNull := false
+	for _, val := range array.values {
+		if val == nil {
+			hasNull = true
+			continue
+		}
+		cond, err := val.EQ(a)
+		if err != nil {
+			return nil, err
+		}
+		if cond {
+			return BoolValue(true), nil
+		}
 	}
-	return BoolValue(cond), nil
+	if hasNull {
+		return nil, nil
+	}
+	return BoolValue(false), nil
 }
 
 func STRUCT_FIELD(v Value, idx int) (Value, error) {

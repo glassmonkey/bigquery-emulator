@@ -776,6 +776,190 @@ func TestDirectDDL(t *testing.T) {
 	}
 }
 
+func TestCreateSchemaDDL(t *testing.T) {
+	// Pins issue #121: dbt's `create_schema` step (CREATE SCHEMA IF NOT
+	// EXISTS) must succeed against the emulator and the dataset must
+	// be visible through the REST list/get path. Without this, dbt
+	// build cannot run against the emulator unmodified.
+	const projectID = "test"
+	ctx := context.Background()
+
+	t.Run("CREATE SCHEMA creates a new dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("CREATE SCHEMA `test`.`newds`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !datasetVisible(t, ctx, client, "newds") {
+			t.Fatal("dataset not visible after CREATE SCHEMA")
+		}
+	})
+
+	t.Run("CREATE SCHEMA IF NOT EXISTS creates a new dataset (issue #121 literal repro)", func(t *testing.T) {
+		// Exact wording from the issue body. The bug was a hard
+		// reject ("Statement not supported: CreateSchemaStatement")
+		// before the dataset ever got a chance to be created, so
+		// this subtest pins the success-on-absent path that dbt's
+		// `create_schema` macro relies on.
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("CREATE SCHEMA IF NOT EXISTS `test`.`newds`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !datasetVisible(t, ctx, client, "newds") {
+			t.Fatal("dataset not visible after CREATE SCHEMA IF NOT EXISTS")
+		}
+	})
+
+	t.Run("CREATE SCHEMA IF NOT EXISTS is idempotent on existing dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID, "existing")
+		if _, err := client.Query("CREATE SCHEMA IF NOT EXISTS `test`.`existing`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("DROP SCHEMA removes a dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID, "doomed")
+		if _, err := client.Query("DROP SCHEMA `test`.`doomed`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if datasetVisible(t, ctx, client, "doomed") {
+			t.Fatal("dataset still visible after DROP SCHEMA")
+		}
+	})
+
+	t.Run("DROP SCHEMA IF EXISTS is no-op on absent dataset", func(t *testing.T) {
+		client := newSchemaTestClient(t, ctx, projectID)
+		if _, err := client.Query("DROP SCHEMA IF EXISTS `test`.`absent`").Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// newSchemaTestClient builds a fresh emulator + bigquery client per
+// subtest, optionally pre-loading datasets so each subtest can start
+// from its own initial state without depending on sibling order.
+// Cleanup is registered with t.Cleanup so each subtest fully tears
+// down on return.
+func newSchemaTestClient(t *testing.T, ctx context.Context, projectID string, datasetIDs ...string) *bigquery.Client {
+	t.Helper()
+	datasets := make([]*types.Dataset, 0, len(datasetIDs))
+	for _, id := range datasetIDs {
+		datasets = append(datasets, types.NewDataset(id))
+	}
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID, datasets...))); err != nil {
+		t.Fatal(err)
+	}
+	ts := bqServer.TestServer()
+	t.Cleanup(func() {
+		ts.Close()
+		bqServer.Stop(ctx)
+	})
+	client, err := bigquery.NewClient(ctx, projectID,
+		option.WithEndpoint(ts.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+// datasetVisible scans client.Datasets for id. Trivial loop with no
+// branching beyond the iterator's done signal — kept that way so the
+// helper itself does not need its own test (R9).
+func datasetVisible(t *testing.T, ctx context.Context, c *bigquery.Client, id string) bool {
+	t.Helper()
+	it := c.Datasets(ctx)
+	for {
+		ds, err := it.Next()
+		if err == iterator.Done {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ds.DatasetID == id {
+			return true
+		}
+	}
+}
+
+func TestCreateSchemaWithOptions(t *testing.T) {
+	// Pins the "soundness" boundary chosen in the design discussion
+	// for issue #121: OPTIONS the emulator persists must round-trip
+	// through REST GET (description / labels / location / expiration
+	// days); OPTIONS BigQuery defines but the emulator does NOT
+	// persist must still be accepted (= dbt unmodified) — that
+	// completeness path is covered by the library-layer test.
+	const (
+		projectID = "test"
+		datasetID = "with_opts"
+	)
+
+	ctx := context.Background()
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID))); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	client, err := bigquery.NewClient(
+		ctx,
+		projectID,
+		option.WithEndpoint(testServer.URL),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	q := fmt.Sprintf(
+		"CREATE SCHEMA `%s`.`%s` OPTIONS("+
+			"description='dbt-managed', "+
+			"friendly_name='Friendly Name', "+
+			"location='US', "+
+			"labels=[(\"env\",\"dev\"),(\"team\",\"data\")], "+
+			"default_table_expiration_days=7"+
+			")",
+		projectID, datasetID,
+	)
+	if _, err := client.Query(q).Run(ctx); err != nil {
+		t.Fatalf("CREATE SCHEMA with OPTIONS: %v", err)
+	}
+
+	md, err := client.Dataset(datasetID).Metadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md.Description != "dbt-managed" {
+		t.Errorf("Description: want %q, got %q", "dbt-managed", md.Description)
+	}
+	if md.Name != "Friendly Name" {
+		t.Errorf("FriendlyName: want %q, got %q", "Friendly Name", md.Name)
+	}
+	if md.Location != "US" {
+		t.Errorf("Location: want %q, got %q", "US", md.Location)
+	}
+	wantLabels := map[string]string{"env": "dev", "team": "data"}
+	if diff := cmp.Diff(wantLabels, md.Labels); diff != "" {
+		t.Errorf("Labels (-want +got):\n%s", diff)
+	}
+	// 7 days = 7 * 86_400_000 ms.
+	if md.DefaultTableExpiration != 7*24*time.Hour {
+		t.Errorf("DefaultTableExpiration: want %v, got %v", 7*24*time.Hour, md.DefaultTableExpiration)
+	}
+}
+
 func TestView(t *testing.T) {
 	const (
 		projectName = "test"

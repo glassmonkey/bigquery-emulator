@@ -139,6 +139,97 @@ CREATE TABLE IF NOT EXISTS Singers (
 			t.Errorf("(-want +got):\n%s", diff)
 		}
 	})
+	t.Run("schema", func(t *testing.T) {
+		// CREATE SCHEMA / DROP SCHEMA are metadata-only operations
+		// in the emulator (no SQLite-side schema is created), so the
+		// contract this test pins is the ChangedCatalog signal: SQL
+		// engine surfaces the dataset identity + OPTIONS to the
+		// server layer, which is the only place the metaRepo can be
+		// updated. If this assertion regresses, dbt's `create_schema`
+		// will silently no-op on the server side.
+		db, err := sql.Open("zetasqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := db.ExecContext(
+			context.Background(),
+			`CREATE SCHEMA IF NOT EXISTS newds OPTIONS(description='for dbt', labels=[("env","dev")], default_table_expiration_days=7)`,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resultCatalog, err := ChangedCatalogFromResult(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resultCatalog.Changed() {
+			t.Fatal("failed to get changed catalog")
+		}
+		if len(resultCatalog.Dataset.Added) != 1 {
+			t.Fatalf("expected 1 added dataset, got %d", len(resultCatalog.Dataset.Added))
+		}
+		added := resultCatalog.Dataset.Added[0]
+		if diff := cmp.Diff([]string{"newds"}, added.NamePath); diff != "" {
+			t.Errorf("NamePath (-want +got):\n%s", diff)
+		}
+		wantOpts := DatasetOptions{
+			Description:                "for dbt",
+			Labels:                     map[string]string{"env": "dev"},
+			DefaultTableExpirationDays: 7,
+		}
+		if diff := cmp.Diff(wantOpts, added.Options); diff != "" {
+			t.Errorf("Options (-want +got):\n%s", diff)
+		}
+
+		rows, err := db.QueryContext(context.Background(), `DROP SCHEMA newds`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		rowsCatalog, err := ChangedCatalogFromRows(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rowsCatalog.Dataset.Deleted) != 1 {
+			t.Fatalf("expected 1 deleted dataset, got %d", len(rowsCatalog.Dataset.Deleted))
+		}
+		if diff := cmp.Diff([]string{"newds"}, rowsCatalog.Dataset.Deleted[0].NamePath); diff != "" {
+			t.Errorf("Deleted NamePath (-want +got):\n%s", diff)
+		}
+	})
+	t.Run("schema_unknown_options", func(t *testing.T) {
+		// Options BigQuery defines but that the emulator does not
+		// persist (no field on bigqueryv2.Dataset) must still be
+		// accepted on the wire — rejecting them would break dbt and
+		// other clients. The contract is that those names land in
+		// UnknownOptions so the server layer can emit a WARN log
+		// (silent ignore is the failure mode this guards against).
+		db, err := sql.Open("zetasqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := db.ExecContext(
+			context.Background(),
+			`CREATE SCHEMA partial_persist OPTIONS(description='ok', default_kms_key_name='projects/p/locations/us/keyRings/r/cryptoKeys/k')`,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resultCatalog, err := ChangedCatalogFromResult(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		added := resultCatalog.Dataset.Added[0]
+		wantOpts := DatasetOptions{Description: "ok"}
+		if diff := cmp.Diff(wantOpts, added.Options); diff != "" {
+			t.Errorf("Options (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]string{"default_kms_key_name"}, added.UnknownOptions); diff != "" {
+			t.Errorf("UnknownOptions (-want +got):\n%s", diff)
+		}
+	})
 	t.Run("function", func(t *testing.T) {
 		db, err := sql.Open("zetasqlite", ":memory:")
 		if err != nil {
