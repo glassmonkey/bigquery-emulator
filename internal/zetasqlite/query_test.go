@@ -226,6 +226,84 @@ UNION ALL
 			query:        "SELECT 100 <> 10",
 			expectedRows: [][]interface{}{{true}},
 		},
+		// Regression tests for https://github.com/glassmonkey/bigquery-emulator/issues/101
+		// BigQuery STRUCT equality with NULL fields must return NULL (not panic, not FALSE).
+		// Truth table per BQ docs: any non-NULL field differs → FALSE; else any NULL field → NULL; else TRUE.
+		{
+			name:         "struct eq both null fields equal non-null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) = STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq differing non-null field with null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) = STRUCT(2, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "struct eq one side fully populated other has null",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct ne both null fields equal non-null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) != STRUCT(1, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct ne differing non-null field with null",
+			query:        `SELECT STRUCT(1, CAST(NULL AS INT64)) != STRUCT(2, CAST(NULL AS INT64))`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq all fields non-null and equal",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, 2)`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq all fields non-null and differ",
+			query:        `SELECT STRUCT(1, 2) = STRUCT(1, 3)`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		// Semantic coverage: the same three-valued logic must apply across all
+		// scalar field types, not just INT64. structEQ delegates per-field
+		// comparison to EQ(av, bv), which then dispatches to the concrete
+		// Value's EQ method, so a regression in the dispatch wiring would slip
+		// past INT64-only cases.
+		{
+			name:         "struct eq with STRING fields, NULL field present -> NULL",
+			query:        `SELECT STRUCT("a", CAST(NULL AS STRING)) = STRUCT("a", CAST(NULL AS STRING))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq with FLOAT64 fields, non-NULL field differs -> FALSE",
+			query:        `SELECT STRUCT(1.5, 2.5) = STRUCT(1.5, 3.5)`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "struct eq with BOOL fields, NULL field present -> NULL",
+			query:        `SELECT STRUCT(true, CAST(NULL AS BOOL)) = STRUCT(true, CAST(NULL AS BOOL))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq with TIMESTAMP fields, non-NULL field differs -> FALSE",
+			query:        `SELECT STRUCT(TIMESTAMP '2024-01-01 00:00:00 UTC', TIMESTAMP '2025-01-01 00:00:00 UTC') = STRUCT(TIMESTAMP '2024-01-01 00:00:00 UTC', TIMESTAMP '2026-01-01 00:00:00 UTC')`,
+			expectedRows: [][]interface{}{{false}},
+		},
+		{
+			name:         "struct eq with NUMERIC fields, all non-NULL and equal -> TRUE",
+			query:        `SELECT STRUCT(NUMERIC '1.5', NUMERIC '2.5') = STRUCT(NUMERIC '1.5', NUMERIC '2.5')`,
+			expectedRows: [][]interface{}{{true}},
+		},
+		{
+			name:         "struct eq with BYTES fields, NULL field present -> NULL",
+			query:        `SELECT STRUCT(b"abc", CAST(NULL AS BYTES)) = STRUCT(b"abc", CAST(NULL AS BYTES))`,
+			expectedRows: [][]interface{}{{nil}},
+		},
+		{
+			name:         "struct eq with DATE fields, all non-NULL and equal -> TRUE",
+			query:        `SELECT STRUCT(DATE '2024-01-01', DATE '2024-02-01') = STRUCT(DATE '2024-01-01', DATE '2024-02-01')`,
+			expectedRows: [][]interface{}{{true}},
+		},
 		{
 			name:         "like operator",
 			query:        `SELECT "abcd" LIKE "a%d"`,
