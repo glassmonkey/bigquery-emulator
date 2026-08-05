@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -12,8 +11,9 @@ import (
 // cases to record which inputs the emulator currently accepts or rejects.
 //
 // The goal is observation, not assertion: every case logs its outcome and the
-// test only fails if database open itself fails. The output is what we use to
-// fill in a support matrix vs. BigQuery production behavior.
+// test only fails if database open itself fails. Where production BigQuery
+// behavior is known it is recorded in the truth map below so disagreements are
+// logged as [MISMATCH] rather than blending into [ACCEPT]/[REJECT].
 func TestProbeConcatCoercion(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	ctx := context.Background()
@@ -77,42 +77,33 @@ func TestProbeConcatCoercion(t *testing.T) {
 		{"sibling-SPLIT", `SPLIT(int,string)`, `SELECT SPLIT(123, "2")`},
 	}
 
+	// truth records production BigQuery behavior for the cases we have
+	// confirmed (issue #98 dry-runs, doc spec). Keyed by the exact SQL text;
+	// cases absent here stay in pure observation mode (bqUnknown).
+	truth := map[string]groundTruth{
+		// doc spec: STRING / BYTES / ARRAY concatenation, value pinned.
+		`SELECT "a" || "b"`:                  {bqAccept, "[ab]"},
+		`SELECT "a" || CAST(NULL AS STRING)`: {bqAccept, "[<nil>]"}, // BQ: NULL propagates
+		`SELECT b"a" || b"b"`:                {bqAccept, "[YWI=]"},
+		`SELECT [1, 2] || [3, 4]`:            {bqAccept, "[[1 2 3 4]]"},
+		// doc cross-type: BQ rejects STRING||BYTES and STRING||ARRAY.
+		`SELECT "a" || b"b"`: {bqReject, ""},
+		`SELECT "a" || [1]`:  {bqReject, ""},
+		// issue #98: BQ implicitly coerces non-STRING operands; dry-run
+		// validates (accept), rendered value not recorded -> want left empty.
+		`SELECT "abc" || 123`:               {bqAccept, ""},
+		`SELECT 123 || "abc"`:               {bqAccept, ""},
+		`SELECT "abc" || 1.5`:               {bqAccept, ""},
+		`SELECT "abc" || DATE "2026-01-01"`: {bqAccept, ""},
+		// sibling sink CONCAT (issue #43, same root as #98).
+		`SELECT CONCAT("a", 1)`: {bqAccept, ""},
+		// FORMAT accepts INT arg by spec.
+		`SELECT FORMAT("%d", 1)`: {bqAccept, "[1]"},
+	}
+
 	for _, c := range cases {
-		c := c
 		t.Run(fmt.Sprintf("%s/%s", c.group, c.name), func(t *testing.T) {
-			rows, err := db.QueryContext(ctx, c.sql)
-			if err != nil {
-				t.Logf("[REJECT] %s -> %s", c.sql, oneLine(err.Error()))
-				return
-			}
-			defer rows.Close()
-			cols, _ := rows.Columns()
-			outs := []string{}
-			for rows.Next() {
-				vals := make([]interface{}, len(cols))
-				ptrs := make([]interface{}, len(cols))
-				for i := range vals {
-					ptrs[i] = &vals[i]
-				}
-				if err := rows.Scan(ptrs...); err != nil {
-					t.Logf("[SCAN-ERR] %s -> %s", c.sql, oneLine(err.Error()))
-					return
-				}
-				outs = append(outs, fmt.Sprintf("%v", vals))
-			}
-			if err := rows.Err(); err != nil {
-				t.Logf("[ROWS-ERR] %s -> %s", c.sql, oneLine(err.Error()))
-				return
-			}
-			t.Logf("[ACCEPT] %s -> %s", c.sql, strings.Join(outs, " | "))
+			runProbe(t, ctx, db, c.sql, truth[c.sql])
 		})
 	}
-}
-
-func oneLine(s string) string {
-	s = strings.ReplaceAll(s, "\n", " | ")
-	if len(s) > 240 {
-		s = s[:240] + "..."
-	}
-	return s
 }

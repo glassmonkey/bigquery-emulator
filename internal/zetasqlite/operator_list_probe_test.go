@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -213,41 +212,82 @@ func TestProbeOperatorList(t *testing.T) {
 		// 19. Graph operators (expected: emulator does NOT support)
 		// ============================================================
 		{"graph", "GRAPH MATCH (expect reject)", `GRAPH graph_db.FinGraph MATCH (a:Account)-[t:Transfers]->(b:Account) RETURN a.id`},
+
+		// ============================================================
+		// 20. Operator precedence (doc precedence table)
+		// ============================================================
+		{"precedence", "* before + -> 7", `SELECT 1 + 2 * 3`},
+		{"precedence", "paren overrides -> 9", `SELECT (1 + 2) * 3`},
+		{"precedence", "unary - before + -> 1", `SELECT -2 + 3`},
+		{"precedence", "arith before compare -> TRUE", `SELECT 2 + 3 = 5`},
+		{"precedence", "& before | -> 3", `SELECT 1 | 2 & 3`},
+		{"precedence", "^ before | -> 7", `SELECT 1 ^ 2 | 4`},
+		{"precedence", "NOT before AND -> FALSE", `SELECT NOT FALSE AND FALSE`},
+		{"precedence", "AND before OR -> TRUE", `SELECT TRUE OR FALSE AND FALSE`},
+
+		// ============================================================
+		// 21. Bitwise operators on BYTES (doc: &, |, ^, ~ on BYTES)
+		// ============================================================
+		{"bitwise-bytes", "BYTES &", `SELECT b'\x0f' & b'\x03'`},
+		{"bitwise-bytes", "BYTES |", `SELECT b'\x01' | b'\x02'`},
+		{"bitwise-bytes", "BYTES ^", `SELECT b'\xff' ^ b'\x0f'`},
+		{"bitwise-bytes", "BYTES ~", `SELECT ~b'\x00'`},
+
+		// ============================================================
+		// 22. Comparison: NULL operand & non-INT types
+		// ============================================================
+		{"comparison-ext", "1 = NULL -> NULL", `SELECT 1 = CAST(NULL AS INT64)`},
+		{"comparison-ext", "string < string -> TRUE", `SELECT 'a' < 'b'`},
+		{"comparison-ext", "timestamp < timestamp -> TRUE", `SELECT TIMESTAMP "2021-01-01 00:00:00" < TIMESTAMP "2021-01-02 00:00:00"`},
+		{"comparison-ext", "bytes = bytes -> TRUE", `SELECT b'abc' = b'abc'`},
+	}
+
+	// truth records production BigQuery behavior for the cases we have
+	// confirmed against the docs. Keyed by the exact SQL text; cases absent
+	// here stay in pure observation mode (bqUnknown). The MISMATCH entries are
+	// the payload of this probe: they name concrete gaps vs. real BigQuery.
+	truth := map[string]groundTruth{
+		// Agreement pins (guard against regressing correct behavior).
+		`SELECT 1 + 2`:             {bqAccept, "[3]"},
+		`SELECT TRUE AND FALSE`:    {bqAccept, "[false]"},
+		`SELECT 1 = 1`:             {bqAccept, "[true]"},
+		`SELECT NULL IS NULL`:      {bqAccept, "[true]"},
+		`SELECT 'apple' LIKE 'a%'`: {bqAccept, "[true]"},
+		// BQ rejects a literal NULL LIKE operand at analysis time.
+		`SELECT NULL LIKE 'a%'`: {bqReject, ""},
+		// --- surfaced bugs ---
+		// `_` matches exactly one char, so 'apple' LIKE '_pple' is TRUE in BQ;
+		// the emulator returns false (silent wrong result).
+		`SELECT 'apple' LIKE '_pple'`: {bqAccept, "[true]"},
+		// A non-literal NULL pattern makes LIKE return NULL in BQ (three-valued
+		// logic); the emulator returns false.
+		`SELECT 'apple' LIKE CAST(NULL AS STRING)`: {bqAccept, "[<nil>]"},
+		// Quantified LIKE is a documented BQ operator; the emulator rejects it.
+		`SELECT 'apple' LIKE ANY ('a%', 'b%')`: {bqAccept, "[true]"},
+		// precedence: pinned to the value BQ's precedence table produces.
+		`SELECT 1 + 2 * 3`:               {bqAccept, "[7]"},
+		`SELECT (1 + 2) * 3`:             {bqAccept, "[9]"},
+		`SELECT -2 + 3`:                  {bqAccept, "[1]"},
+		`SELECT 2 + 3 = 5`:               {bqAccept, "[true]"},
+		`SELECT 1 | 2 & 3`:               {bqAccept, "[3]"}, // & tighter than |
+		`SELECT 1 ^ 2 | 4`:               {bqAccept, "[7]"}, // ^ tighter than |
+		`SELECT NOT FALSE AND FALSE`:     {bqAccept, "[false]"},
+		`SELECT TRUE OR FALSE AND FALSE`: {bqAccept, "[true]"},
+		// bytes bitwise: BQ accepts; value not pinned (base64 render).
+		`SELECT b'\x0f' & b'\x03'`: {bqAccept, ""},
+		`SELECT b'\x01' | b'\x02'`: {bqAccept, ""},
+		`SELECT b'\xff' ^ b'\x0f'`: {bqAccept, ""},
+		`SELECT ~b'\x00'`:          {bqAccept, ""},
+		// comparison across NULL / non-INT types.
+		`SELECT 1 = CAST(NULL AS INT64)`: {bqAccept, "[<nil>]"}, // NULL comparison -> NULL
+		`SELECT 'a' < 'b'`:               {bqAccept, "[true]"},
+		`SELECT TIMESTAMP "2021-01-01 00:00:00" < TIMESTAMP "2021-01-02 00:00:00"`: {bqAccept, "[true]"},
+		`SELECT b'abc' = b'abc'`: {bqAccept, "[true]"},
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(fmt.Sprintf("%s/%s", c.group, c.name), func(t *testing.T) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Logf("[PANIC] %s -> %v", c.sql, r)
-				}
-			}()
-			rows, err := db.QueryContext(ctx, c.sql)
-			if err != nil {
-				t.Logf("[REJECT] %s -> %s", c.sql, oneLine(err.Error()))
-				return
-			}
-			defer rows.Close()
-			cols, _ := rows.Columns()
-			outs := []string{}
-			for rows.Next() {
-				vals := make([]interface{}, len(cols))
-				ptrs := make([]interface{}, len(cols))
-				for i := range vals {
-					ptrs[i] = &vals[i]
-				}
-				if err := rows.Scan(ptrs...); err != nil {
-					t.Logf("[SCAN-ERR] %s -> %s", c.sql, oneLine(err.Error()))
-					return
-				}
-				outs = append(outs, fmt.Sprintf("%v", vals))
-			}
-			if err := rows.Err(); err != nil {
-				t.Logf("[ROWS-ERR] %s -> %s", c.sql, oneLine(err.Error()))
-				return
-			}
-			t.Logf("[ACCEPT] %s -> %s", c.sql, strings.Join(outs, " | "))
+			runProbe(t, ctx, db, c.sql, truth[c.sql])
 		})
 	}
 }
