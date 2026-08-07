@@ -141,6 +141,51 @@ UNION ALL
 			query:        "SELECT 4 >> 1",
 			expectedRows: [][]interface{}{{int64(2)}},
 		},
+		// Regression tests for bitwise operators on BYTES. These previously passed
+		// the analyzer but crashed at result decode (`strconv.ParseInt`) because the
+		// operators only handled INT64. BigQuery operates bytewise on equal-length
+		// BYTES; shifts keep the operand length and zero-fill vacated bits. BYTES
+		// results are returned base64-encoded.
+		{
+			name:         "bitwise and on bytes",
+			query:        `SELECT b'\x0f' & b'\x03'`,
+			expectedRows: [][]interface{}{{"Aw=="}}, // b'\x03'
+		},
+		{
+			name:         "bitwise or on bytes",
+			query:        `SELECT b'\x01' | b'\x02'`,
+			expectedRows: [][]interface{}{{"Aw=="}}, // b'\x03'
+		},
+		{
+			name:         "bitwise xor on bytes",
+			query:        `SELECT b'\xff' ^ b'\x0f'`,
+			expectedRows: [][]interface{}{{"8A=="}}, // b'\xf0'
+		},
+		{
+			name:         "bitwise not on bytes",
+			query:        `SELECT ~b'\x00'`,
+			expectedRows: [][]interface{}{{"/w=="}}, // b'\xff'
+		},
+		{
+			name:         "left shift on bytes",
+			query:        `SELECT b'\x0f' << 4`,
+			expectedRows: [][]interface{}{{"8A=="}}, // b'\xf0'
+		},
+		{
+			name:         "left shift on bytes across byte boundary",
+			query:        `SELECT b'\x01\x02' << 4`,
+			expectedRows: [][]interface{}{{"ECA="}}, // b'\x10\x20'
+		},
+		{
+			name:         "right shift on bytes",
+			query:        `SELECT b'\xf0' >> 4`,
+			expectedRows: [][]interface{}{{"Dw=="}}, // b'\x0f'
+		},
+		{
+			name:        "bitwise and on bytes rejects unequal length",
+			query:       `SELECT b'\x01' & b'\x01\x02'`,
+			expectedErr: "Bitwise binary operator & requires equal-length bytes. Got 1 bytes and 2 bytes",
+		},
 		// Regression test for https://github.com/glassmonkey/bigquery-emulator/issues/99
 		// Negative shift amounts panic in Go's <<,>> operators; BigQuery returns a query-level error.
 		{
@@ -842,8 +887,8 @@ FROM Items`,
 			expectedRows: [][]interface{}{{"apple"}},
 		},
 		{
-			name:       "any_value with window",
-			query:      `SELECT fruit, ANY_VALUE(fruit) OVER (ORDER BY LENGTH(fruit) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST(["apple", "banana", "pear"]) as fruit`,
+			name:  "any_value with window",
+			query: `SELECT fruit, ANY_VALUE(fruit) OVER (ORDER BY LENGTH(fruit) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST(["apple", "banana", "pear"]) as fruit`,
 			expectedRows: [][]interface{}{
 				{"pear", "pear"},
 				{"apple", "pear"},
@@ -969,8 +1014,8 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 			expectedRows: [][]interface{}{{float64(2.75)}},
 		},
 		{
-			name:       "avg with window",
-			query:      `SELECT x, AVG(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST([0, 2, NULL, 4, 4, 5]) AS x`,
+			name:  "avg with window",
+			query: `SELECT x, AVG(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM UNNEST([0, 2, NULL, 4, 4, 5]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, nil},
 				{int64(0), float64(0)},
@@ -1041,8 +1086,8 @@ SELECT ARRAY_CONCAT_AGG(x) AS array_concat_agg FROM (
 			expectedRows: [][]interface{}{{int64(0)}},
 		},
 		{
-			name:       "countif with window",
-			query:      `SELECT x, COUNTIF(x<0) OVER (ORDER BY ABS(x) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM UNNEST([5, -2, 3, 6, -10, NULL, -7, 4, 0]) AS x`,
+			name:  "countif with window",
+			query: `SELECT x, COUNTIF(x<0) OVER (ORDER BY ABS(x) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM UNNEST([5, -2, 3, 6, -10, NULL, -7, 4, 0]) AS x`,
 			expectedRows: [][]interface{}{
 				{nil, int64(0)},
 				{int64(0), int64(1)},
@@ -1608,7 +1653,7 @@ FROM Produce`,
 		},
 
 		{
-			name:       `window offset`,
+			name: `window offset`,
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1633,7 +1678,7 @@ FROM Produce`,
 			},
 		},
 		{
-			name:       `window avg`,
+			name: `window avg`,
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1710,7 +1755,7 @@ FROM Produce`,
 			},
 		},
 		{
-			name:       `window last_value with offset`,
+			name: `window last_value with offset`,
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -1736,7 +1781,7 @@ FROM Produce`,
 			},
 		},
 		{
-			name:       `window last_value with named window`,
+			name: `window last_value with named window`,
 			query: `
 WITH Produce AS
  (SELECT 'kale' as item, 23 as purchases, 'vegetable' as category
@@ -2038,7 +2083,7 @@ FROM UNNEST(['c', NULL, 'b', 'a']) AS x`,
 			},
 		},
 		{
-			name:       "window range",
+			name: "window range",
 			query: `
 WITH Farm AS
  (SELECT 'cat' as animal, 23 as population, 'mammal' as category
